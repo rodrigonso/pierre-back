@@ -40,7 +40,7 @@ def find_clothing_items(query: str):
 
         formatted_results.append(formatted_item)
 
-    print(formatted_results)
+    # print(formatted_results)
     return formatted_results
 
 # def build_wardrobe(preferences: str, budget: str, season: str):
@@ -146,7 +146,7 @@ def shopping_advisor(
     state: MessagesState,
 ) -> Command[Literal["stylist_advisor", "wardrobe_finalizer"]]:
     system_prompt = (
-        "You are a shopping expert that helps find real clothing items based on the stylist's recommendations. "
+        "You are a shopping expert that helps find real clothing items based on the stylist's recommendations from the worlds top/premium retailers. "
         "When you receive outfit recommendations with bracketed search terms like [black turtleneck sweater merino wool], "
         "your job is to:"
         "1. Extract each bracketed search term"
@@ -217,32 +217,43 @@ def wardrobe_finalizer(
         "- The original outfit concept and search terms (in brackets)"
         "- The actual items found with their prices, links, and images"
         
-        "Create a detailed final report in this format:"
+        "IMPORTANT: Your response must ONLY contain a valid JSON object with no additional text or explanation. Use exactly this structure:"
         
-        "# Original Outfit Concept"
-        "[Copy the original outfit name and style description from stylist_advisor]"
+        "{"
+        "  'original_outfit_concept': {"
+        "    'name': 'The outfit name',"
+        "    'style_description': 'Style description from stylist_advisor'"
+        "  },"
+        "  'found_items': ["
+        "    {"
+        "      'original_search_term': 'what was requested',"
+        "      'found_item': {"
+        "        'name': 'actual item name',"
+        "        'price': 'price in USD',"
+        "        'link': 'product_link',"
+        "        'image': 'product_image'"
+        "      },"
+        "      'match_analysis': 'Brief note on how well this matches the original request'"
+        "    }"
+        "  ],"
+        "  'final_summary': {"
+        "    'total_cost': 'total in USD',"
+        "    'original_budget': 'budget in USD',"
+        "    'budget_status': {"
+        "      'status': 'under/over',"
+        "      'difference': 'amount in USD'"
+        "    },"
+        "    'styling_instructions': 'How to wear these specific items together',"
+        "    'care_instructions': 'Specific to the actual items found'"
+        "  },"
+        "  'shopping_recommendations': {"
+        "    'priority_pieces': ['list of items to prioritize'],"
+        "    'potential_savings': ['areas where savings could be found'],"
+        "    'alternative_options': ['recommended alternatives if needed']"
+        "  }"
+        "}"
         
-        "# Found Items"
-        "For each item from the original plan:"
-        "- Original Search Term: [what was requested]"
-        "- Found Item: [actual item name] - $[price]"
-        "- Link: [product_link]"
-        "- Image: [product_image]"
-        "- Match Analysis: Brief note on how well this matches the original request"
-        
-        "# Final Outfit Summary"
-        "- Total Cost: $XXX (Original Budget: $XXX)"
-        "- Budget Status: Under/Over by $XXX"
-        "- Styling Instructions: How to wear these specific items together"
-        "- Care Instructions: Specific to the actual items found"
-        
-        "# Shopping Recommendations"
-        "If over budget:"
-        "- Suggest which pieces to prioritize"
-        "- Identify where savings could be found"
-        "- Recommend alternative options if needed"
-        
-        "Keep your response organized and easy to read. Focus on connecting the original vision with the actual items found."
+        "Do not include any other text, explanations, or formatting - only output the JSON object."
     )
     
     messages = [{"role": "system", "content": system_prompt}] + state["messages"]
@@ -266,16 +277,34 @@ builder.add_edge("wardrobe_finalizer", END)
 
 graph = builder.compile()
 
-for chunk in graph.stream(
-    {
-        "messages": [
-            (
-                "user",
-                "I am looking for a new outfit for the winter. I like neutral colors and prefer a Parisian chic style. My budget is $1000.",
-            )
-        ]
-    }
-):
-    print(chunk)
-    print("\n")
+# for chunk in graph.stream(
+#     {
+#         "messages": [
+#             (
+#                 "user",
+#                 "I am looking for a new outfit for the winter. I like neutral colors and prefer a Parisian chic style. My budget is $1000.",
+#             )
+#         ]
+#     }
+# ):
+#     print(chunk)
+#     print("\n")
+
+result = graph.invoke({
+    "messages": [
+        (
+            "user",
+            "I am looking for a new outfit for the winter. I like neutral colors and prefer a Parisian chic style. My budget is $1000.",
+        )
+    ]
+})
+
+# The final message will be the last message in the chain
+final_message = result["messages"][-1]
+# Since it's JSON, you might want to parse it
+print(final_message)
+print("\n------------------------------------\n")
+print(result["messages"])
+# final_result = json.loads(final_message.content)
+# print(json.dumps(final_result, indent=2))
 
