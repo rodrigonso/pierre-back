@@ -19,7 +19,7 @@ def find_clothing_items(query: str):
         "engine": "google_shopping",
         "q": query,
         "api_key": os.getenv("SERPAPI_API_KEY"),
-        "num": 3,
+        "num": 1,
         "hl": "en",
         "gl": "us",
         "location": "United States"
@@ -144,7 +144,7 @@ def stylist_advisor(
 
 def shopping_advisor(
     state: MessagesState,
-) -> Command[Literal["stylist_advisor", "__end__"]]:
+) -> Command[Literal["stylist_advisor", "wardrobe_finalizer"]]:
     system_prompt = (
         "You are a shopping expert that helps find real clothing items based on the stylist's recommendations. "
         "When you receive outfit recommendations with bracketed search terms like [black turtleneck sweater merino wool], "
@@ -170,8 +170,10 @@ def shopping_advisor(
         "Set should_search=true when your response includes 'SEARCH:' queries."
     )
     messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-    target_agent_nodes = ["stylist_advisor"]
+    target_agent_nodes = ["stylist_advisor", "wardrobe_finalizer"]
     response = call_llm(messages, target_agent_nodes)
+
+ 
     
     # Check if the response indicates a search should be performed
     if response["should_search"] and "SEARCH:" in response["response"]:
@@ -203,12 +205,64 @@ def shopping_advisor(
     ai_msg = {"role": "ai", "content": response["response"], "name": "shopping_advisor"}
     return Command(goto=response["goto"], update={"messages": ai_msg})
 
+def wardrobe_finalizer(
+    state: MessagesState,
+) -> Command[Literal["__end__"]]:
+    system_prompt = (
+        "You are a wardrobe finalizer that creates the final presentation by combining:"
+        "1. The original outfit plan from the stylist_advisor"
+        "2. The actual items found by the shopping_advisor"
+        
+        "Review the conversation history to identify:"
+        "- The original outfit concept and search terms (in brackets)"
+        "- The actual items found with their prices, links, and images"
+        
+        "Create a detailed final report in this format:"
+        
+        "# Original Outfit Concept"
+        "[Copy the original outfit name and style description from stylist_advisor]"
+        
+        "# Found Items"
+        "For each item from the original plan:"
+        "- Original Search Term: [what was requested]"
+        "- Found Item: [actual item name] - $[price]"
+        "- Link: [product_link]"
+        "- Image: [product_image]"
+        "- Match Analysis: Brief note on how well this matches the original request"
+        
+        "# Final Outfit Summary"
+        "- Total Cost: $XXX (Original Budget: $XXX)"
+        "- Budget Status: Under/Over by $XXX"
+        "- Styling Instructions: How to wear these specific items together"
+        "- Care Instructions: Specific to the actual items found"
+        
+        "# Shopping Recommendations"
+        "If over budget:"
+        "- Suggest which pieces to prioritize"
+        "- Identify where savings could be found"
+        "- Recommend alternative options if needed"
+        
+        "Keep your response organized and easy to read. Focus on connecting the original vision with the actual items found."
+    )
+    
+    messages = [{"role": "system", "content": system_prompt}] + state["messages"]
+    target_agent_nodes = ["__end__"]
+    response = call_llm(messages, target_agent_nodes)
+    
+    ai_msg = {"role": "ai", "content": response["response"], "name": "wardrobe_finalizer"}
+    return Command(goto=response["goto"], update={"messages": ai_msg})
 
+# Update the graph builder to include the new agent
 builder = StateGraph(MessagesState)
 builder.add_node("stylist_advisor", stylist_advisor)
 builder.add_node("shopping_advisor", shopping_advisor)
-# we'll always start with a general travel advisor
+builder.add_node("wardrobe_finalizer", wardrobe_finalizer)
+
+# Update the edges to include the new flow
 builder.add_edge(START, "stylist_advisor")
+builder.add_edge("stylist_advisor", "shopping_advisor")
+builder.add_edge("shopping_advisor", "wardrobe_finalizer")
+builder.add_edge("wardrobe_finalizer", END)
 
 graph = builder.compile()
 
@@ -217,7 +271,7 @@ for chunk in graph.stream(
         "messages": [
             (
                 "user",
-                "I am looking for a new outfit for a the winter. I like netural colors and prefer a Parisian chic style. My budget is $1000.",
+                "I am looking for a new outfit for the winter. I like neutral colors and prefer a Parisian chic style. My budget is $1000.",
             )
         ]
     }
