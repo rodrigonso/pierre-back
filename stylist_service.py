@@ -11,7 +11,6 @@ import os
 
 load_dotenv()
 
-
 model = ChatOpenAI(model="gpt-4o")
 
 def find_clothing_items(query: str):
