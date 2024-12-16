@@ -1,19 +1,26 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import uvicorn
 from pinterest_scraper import PinterestScraper
-from stylist_service import StylistService
 from dotenv import load_dotenv
 import os
+from stylist_service import run_stylist_service
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI()
 
-# Initialize stylist service with API key from .env
-stylist_service = StylistService(api_key=os.getenv("OPENAI_API_KEY"))
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 class SearchRequest(BaseModel):
     query: str
@@ -25,16 +32,8 @@ class TrendingRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     pins_data: List[Dict]
 
-class PersonalizationRequest(BaseModel):
-    pins_data: List[Dict]
-    user_preferences: Dict
-
-# class WardrobeRequest(BaseModel):
-#     user_preferences: Dict
-#     budget_range: Dict[str, float]
-#     season: str
-class WardrobeRequest(BaseModel):
-    query: str  
+class StylistRequest(BaseModel):
+    query: str
 
 @app.post("/search")
 async def search_pins(request: SearchRequest):
@@ -56,16 +55,13 @@ async def get_trending_pins(request: TrendingRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/build_wardrobe")
-async def build_wardrobe(request: WardrobeRequest):
+@app.post("/stylist")
+async def get_stylist(request: StylistRequest):
     try:
-        wardrobe = stylist_service.build_wardrobe(
-            request.query
-        )
-        return wardrobe
+        stylist_result = run_stylist_service(request.query)
+        return stylist_result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/health")
 async def health_check():
