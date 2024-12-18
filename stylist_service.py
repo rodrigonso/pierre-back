@@ -91,7 +91,7 @@ def stylist_agent(state: dict):
     prompt = [{
         "role": "system",
         "content": f'As a personal fashion stylist, your sole purpose is to create a a list of outfits based on the user\'s style preferences, gender, budget, and any other user-specific information. You must choose from top/premium brands available online and craft your list based on the information found in the curated style articles.\n'
-                   f'You need to create 10 complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
+                   f'You need to create 1 complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
                    f'Please return your response in this exact JSON string format:\n'
                    f'{{\n'
                    f'  "outfits": [\n'
@@ -183,8 +183,9 @@ def formatter_agent(state: dict):
                 "type": item["type"],
                 "search_query": search_query,
                 "product": shopping_result if shopping_result else {
-                    "title": "No product found",
-                    "price": "N/A",
+                    "product_id": None,
+                    "product_title": "No product found",
+                    "product_price": "N/A",
                     "product_link": None,
                     "product_image": None
                 }
@@ -203,7 +204,7 @@ def search_single_item(query: str) -> dict:
         "engine": "google_shopping",
         "q": query,
         "api_key": os.getenv("SERPAPI_API_KEY"),
-        "num": 1,
+        "num": 5,
         "hl": "en",
         "gl": "us",
         "location": "United States"
@@ -217,8 +218,9 @@ def search_single_item(query: str) -> dict:
         item = shopping_results[0]
         return {
             "query": query,
-            "title": item["title"],
-            "price": item["price"],
+            "product_title": item["title"],
+            "product_price": item["price"],
+            "product_id": item["product_id"],
             "product_link": item["product_link"],
             "product_image": item.get("thumbnails", [item.get("thumbnail")])[0] if item.get("thumbnails") or item.get("thumbnail") else None
         }
