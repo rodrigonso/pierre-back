@@ -1,17 +1,20 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from jose import JWTError, jwt
+
 import uvicorn
-from pinterest_scraper import PinterestScraper
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
+from supabase import create_client, Client
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI()
+
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
 # Add CORS middleware
 app.add_middleware(
@@ -22,45 +25,36 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-class SearchRequest(BaseModel):
-    query: str
-    num_pins: Optional[int] = 50
+# Add request authentication middleware
+@app.middleware("http")
+async def add_authentication(request: Request, call_next):
 
-class TrendingRequest(BaseModel):
-    num_pins: Optional[int] = 50
+    if request.method == "OPTIONS":
+        return await call_next(request)
 
-class AnalysisRequest(BaseModel):
-    pins_data: List[Dict]
+    token = request.headers.get("authorization", "").replace("Bearer ", "")
 
-class StylistRequest(BaseModel):
-    query: str
+    if not token:
+        return Response("Unauthorized", status_code=401)
 
-@app.post("/search")
-async def search_pins(request: SearchRequest):
     try:
-        scraper = PinterestScraper()
-        results = scraper.search_pins(request.query, request.num_pins)
-        scraper.close()
-        return {"status": "success", "data": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        auth = supabase.auth.get_user(token)
+        request.state.user_id = auth.user.id
+        supabase.postgrest.auth(token)
 
-@app.post("/trending")
-async def get_trending_pins(request: TrendingRequest):
-    try:
-        scraper = PinterestScraper()
-        results = scraper.get_trending_pins(request.num_pins)
-        scraper.close()
-        return {"status": "success", "data": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        return Response("Invalid user token", status_code=401)
+
+    return await call_next(request)
 
 @app.post("/stylist")
-async def get_stylist(request: StylistRequest):
+async def get_stylist(request: Request):
     try:
-        stylist_result = run_stylist_service(request.query)
+        data = await request.json()
+        stylist_result = run_stylist_service(data)
         return stylist_result
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

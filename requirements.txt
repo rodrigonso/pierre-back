@@ -1,8 +1,5 @@
 fastapi==0.104.1
 uvicorn==0.24.0
-selenium==4.15.2
-webdriver-manager==4.0.1
-pydantic
 python-dotenv
 langchain
 langgraph
@@ -11,3 +8,5 @@ langchain-community
 langchain-openai
 duckduckgo-search
 google-search-results
+supabase
+python-jose[cryptography]
