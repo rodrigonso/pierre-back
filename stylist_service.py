@@ -269,7 +269,7 @@ def search_single_item(query: str, type: str) -> dict:
                 import requests
                 import json
                 test_url = item.get("serpapi_product_api")
-                test_response = requests.get(test_url + "&api_key=c871070954681682c7ffcf78ab5eac2cc390d4ac88eb3bc219f8e9fe871012f7")
+                test_response = requests.get(test_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
                 test_formatted = test_response.json()
                 test_description = test_formatted.get("product_results", {}).get("description", "Description not found")
                 # print(test_description)
