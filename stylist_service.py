@@ -14,19 +14,20 @@ from dotenv import load_dotenv
 import os
 import json
 
-model = ChatOpenAI(model="gpt-4o-mini", max_retries=1)
+model = ChatOpenAI(model="gpt-4o", max_retries=1)
+num_of_outfits = 1
 
 load_dotenv()
 
-def research_agent(user_data: str):
+def research_agent(user_data: dict):
     """
     Generates a prompt for the 'search_agent' to use during the search phase based on the user's initial prompt.
     :param user_query: The user's initial prompt.
     :return: A prompt for the 'search_agent' to use during the search phase.
     """
     print("RESEARCH_AGENT")
-    user_prompt = user_data["prompt"]
-    user_gender = user_data["gender"]
+    user_prompt = user_data["user_prompt"]
+    user_gender = user_data["user_gender"]
 
     prompt = [{
         "role": "system",
@@ -55,7 +56,7 @@ def search_agent(state: dict):
     search = DuckDuckGoSearchResults()
     results = search.run(query)
 
-    return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "search_results": results}
+    return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "curated_articles": results}
 
 def curator_agent(state: dict):
     """
@@ -102,7 +103,7 @@ def stylist_agent(state: dict):
     prompt = [{
         "role": "system",
         "content": f'As a personal fashion stylist, your sole purpose is to create a a list of outfits based on the user\'s style preferences, gender, budget, and any other user-specific information. You MUST choose from top/premium brands that are available online and craft your list based on the information found in the curated style articles.\n'
-                   f'You need to create 20 complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
+                   f'You need to create {num_of_outfits} complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
                    f'Please return your response in this exact JSON string format:\n'
                    f'{{\n'
                    f'  "outfits": [\n'
@@ -138,17 +139,21 @@ def shopping_agent(state: dict):
     """
     print("SHOPPING_AGENT")
     # Extract search queries from stylist_outfits
+    user_prompt = state["user_prompt"]
+    user_gender = state["user_gender"]
     wardrobe_plan = state["wardrobe_plan"]
+
     parsed = json.loads(wardrobe_plan)
 
     outfits = parsed["outfits"]
-    search_queries = [item["search_query"] for outfit in outfits for item in outfit["items"]]
+    search_queries = [(item["search_query"], item["type"]) for outfit in outfits for item in outfit["items"]]
+
 
     # Perform parallel searches using ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=50) as executor:
         future_to_query = {
-            executor.submit(search_single_item, query): query 
-            for query in search_queries
+            executor.submit(search_single_item, query, item_type): (query, item_type) 
+            for query, item_type in search_queries
         }   
 
         formatted_results = []
@@ -156,6 +161,31 @@ def shopping_agent(state: dict):
             result = future.result()
             if result:
                 formatted_results.append(result)
+
+        print(formatted_results)
+        prompt = [{
+            "role": "system",
+            "content": f"As a fashion shopping curator, your sole purpose is to curate the shopping results to find the best match given the user's desired preferences and the wardrobe plan provided by our stylist.\n"
+                       f"You are to select ONLY ONE clothing item from each category. Feel free to use all the information provided to you in order to pick the item that will best match the requirements.\n"
+                       f"Your response should be in JSON format and be an array of product ids that represent your selected products.\n"
+                       f'Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers. \n'
+        }, {
+            "role": "user",
+            "content": f"User gender: {user_gender}\n"
+                       f"User prompt: {user_prompt}\n"
+                       f"Stylist plan: {wardrobe_plan}\n"
+                       f"Search results: {formatted_results}\n"
+        }]
+
+    converted = convert_openai_messages(prompt)
+    response = model.invoke(converted).content
+
+    formatted_test_ids = json.loads(response)
+
+    for index, piece in enumerate(formatted_results):
+        # Assuming pieces is a list of dictionaries and formatted_test_ids is a set or list
+        filtered_pieces = [i for i in piece if i['product_id'] in formatted_test_ids]
+        formatted_results[index] = filtered_pieces[0]
 
     return {"user_gender": state["user_gender"], "user_prompt": state["user_prompt"], "wardrobe_plan": state["wardrobe_plan"], "shopping_results": formatted_results}
 
@@ -201,7 +231,9 @@ def formatter_agent(state: dict):
                     "product_title": "No product found",
                     "product_price": "N/A",
                     "product_link": None,
-                    "product_image": None
+                    "product_image": None,
+                    "product_source": None,
+                    "product_description": None
                 }
             }
             formatted_outfit["items"].append(formatted_item)
@@ -210,58 +242,75 @@ def formatter_agent(state: dict):
 
     return formatted_output
 
-def search_single_item(query: str) -> dict:
+def search_single_item(query: str, type: str) -> dict:
     """
     Perform a single search for an item
     """
-    params = {
-        "engine": "google_shopping",
-        "q": query,
-        "api_key": os.getenv("SERPAPI_API_KEY"),
-        "num": 5,
-        "hl": "en",
-        "gl": "us",
-        "location": "United States",
-        "direct_link": True
-    }
-
-    search = GoogleSearch(params)
-    results = search.get_dict()
-    shopping_results = results.get("shopping_results", [])
-
-    if shopping_results:
-        # TODO: return top 5 products?
-        item = shopping_results[0]
-        return {
-            "query": query,
-            "product_title": item["title"],
-            "product_price": item["price"],
-            "product_id": item["product_id"],
-            "product_link": item["product_link"],
-            "product_images": item.get("thumbnails")
+    try:
+        params = {
+            "engine": "google_shopping",
+            "q": query,
+            "api_key": os.getenv("SERPAPI_API_KEY"),
+            "num": 5,
+            "hl": "en",
+            "gl": "us",
+            "location": "United States",
+            "direct_link": True
         }
+
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        shopping_results = results.get("shopping_results", [])
+
+        if shopping_results:
+            final_results = []
+            items = shopping_results[:5]  # Get the first 5 items
+            for item in items:  # Iterate over the first 5 items
+                import requests
+                import json
+                test_url = item.get("serpapi_product_api")
+                test_response = requests.get(test_url + "&api_key=c871070954681682c7ffcf78ab5eac2cc390d4ac88eb3bc219f8e9fe871012f7")
+                test_formatted = test_response.json()
+                test_description = test_formatted.get("product_results", {}).get("description", "Description not found")
+                # print(test_description)
+
+                result = {
+                    "query": query,
+                    "product_title": item.get("title"),
+                    "product_price": item.get("price"),
+                    "product_id": item.get("product_id"),
+                    "product_link": item.get("product_link"),
+                    "product_images": item.get("thumbnails"),
+                    "product_source": item.get("source"),
+                    "product_type": type,
+                    "product_description": test_description
+                }
+
+                final_results.append(result)
+            return final_results
+
+    except Exception as e:
+        print(f"Error occurred while searching for item: {query}. Error: {e}")
     return None
 
 
-def run_stylist_service(prompt: str):
+def run_stylist_service(user_data: dict):
     workflow = Graph()
 
     workflow.add_node("research_agent", research_agent)
     workflow.add_node("search_agent", search_agent)
-    workflow.add_node("curator_agent", curator_agent)
     workflow.add_node("stylist_agent", stylist_agent)
     workflow.add_node("shopping_agent", shopping_agent)
     workflow.add_node("formatter_agent", formatter_agent)
 
     workflow.add_edge(START, "research_agent")
     workflow.add_edge("research_agent", "search_agent")
-    workflow.add_edge("search_agent", "curator_agent")
-    workflow.add_edge("curator_agent", "stylist_agent")
+    workflow.add_edge("search_agent", "stylist_agent")
     workflow.add_edge("stylist_agent", "shopping_agent")
     workflow.add_edge("shopping_agent", "formatter_agent")
     workflow.add_edge("formatter_agent", END)
 
     chain = workflow.compile()
 
-    result = chain.invoke(prompt)
+    result = chain.invoke(user_data)
     return json.dumps(result)

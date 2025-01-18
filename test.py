@@ -1,360 +1,109 @@
-from typing import TypedDict, List, Dict, Any, Literal
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import AnyMessage
-from langgraph.graph import MessagesState, START, StateGraph, END
-from langgraph.types import Command
-from serpapi import GoogleSearch
-from langchain_community.tools import DuckDuckGoSearchResults
+from typing import Literal
 
+from langgraph.graph import START, END
+from langgraph.prebuilt import ToolNode
+from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_community.adapters.openai import convert_openai_messages
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langgraph.graph import Graph
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from serpapi import GoogleSearch
+from typing import List
 from dotenv import load_dotenv
-import json
 import os
-import re
+import json
+from stylist_service import run_stylist_service
+
+memory = {'test123': ''}
+original_prompt = ""
+model = ChatOpenAI(model="gpt-4o", max_retries=1)
 
 load_dotenv()
 
-def find_clothing_items(query: str):
+def triage_agent(user_data: dict):
     """
-    Find clothing items based on a query.
+    Generates a prompt for the 'search_agent' to use during the search phase based on the user's initial prompt.
+    :param user_query: The user's initial prompt.
+    :return: A prompt for the 'search_agent' to use during the search phase.
     """
-    params = {
-        "engine": "google_shopping",
-        "q": query,
-        "api_key": os.getenv("SERPAPI_API_KEY"),
-        "num": 1,
-        "hl": "en",
-        "gl": "us",
-        "location": "United States"
-    }
+    print("RESEARCH_AGENT")
 
-    search = GoogleSearch(params)
-    results = search.get_dict()
+    original_prompt = user_data['user_prompt']
 
-    print(results)
+    prompt = [{
+        "role": "system",
+        "content": f"As a helpful fashion asistant, your role is to chat with the user and collect information that will help our professional Stylist better serve our user. You need to collect the following information: \n"
+                   f"- User gender\n"
+                   f"- User style\n"
+                   f"- User favorite brands\n"
+                   f"Once the user provided ALL of the required information listed above, you should thank the user and add a [STOP] at the end of your response. Only add a [STOP] at the end of your response when you have ALL of the required information.\n"
+                   f"Please try to keep your responses brief and do not reiterate the information the user provided.\n"
+    }, {
+        "role": "user",
+        "content":  f"User prompt: {user_data['user_prompt']}"
+                    f"Chat history: {memory['test123']}"
+    }]
 
-    shopping_results = results["shopping_results"]
+    converted = convert_openai_messages(prompt)
+    response = model.invoke(converted).content
 
-    formatted_results = []
-    for item in shopping_results:
-        formatted_item = {
-            "title": item["title"],
-            "price": item["price"],
-            "product_link": item["product_link"],
-            "product_image": item.get("thumbnails", [item.get("thumbnail")])[0] if item.get("thumbnails") or item.get("thumbnail") else None
-        }
+    memory['test123'] += f"User: {user_data['user_prompt']}\nAiResponse: {response}\n"
 
-        formatted_results.append(formatted_item)
+    return {"response": response, "user_message": user_data['user_prompt']}
 
-    # print(formatted_results)
-    return formatted_results
+def decision_agent(state: dict):
+    print(state['response'])
 
-model = ChatOpenAI(model="gpt-4o")
+    if ("[STOP]" in state['response']):
+        print("DONE!")
+        prompt = [{
+            "role": "system",
+            "content": f"Your only job is to accurately extract the following information about the user: \n"
+                    f"- User gender\n"
+                    f"- User style\n"
+                    f"- User favorite brands\n"
+                    f"Your response should be in JSON and be in the following format: \n"
+                    f"{{\n"
+                    f'    "user_gender": "<the gender of the user>",\n'
+                    f'    "user_brands": "<an array with the user preferred brands>",\n'
+                    f'    "user_style": "<the style the user wants>"\n'
+                    f"}}\n"
+                    f'Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers. \n'
+        }, {
+            "role": "user",
+            "content":  f"User prompt: {state['response']}"
+                        f"Chat history: {memory['test123']}"
+        }]
 
-# Define a helper for each of the agent nodes to call
-def call_llm(messages: list[AnyMessage], target_agent_nodes: list[str]):
-    """Call LLM with structured output to get a natural language response as well as a target agent (node) to go to next.
+        converted = convert_openai_messages(prompt)
+        response = model.invoke(converted).content
 
-    Args:
-        messages: list of messages to pass to the LLM
-        target_agents: list of the node names of the target agents to navigate to
-    """
-    json_schema = {
-        "name": "Response",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "response": {
-                    "type": "string",
-                    "description": "A human readable response to the original question. If you need to search for items, include 'SEARCH: <query>' in your response. Will be streamed back to the user.",
-                },
-                "goto": {
-                    "enum": [*target_agent_nodes, "__end__"],
-                    "type": "string",
-                    "description": "The next agent to call, or __end__ if the user's query has been resolved. Must be one of the specified values.",
-                },
-                "should_search": {
-                    "type": "boolean",
-                    "description": "Set to true if your response includes a SEARCH: query that should be executed.",
-                }
-            },
-            "required": ["response", "goto", "should_search"],
-        },
-    }
-    response = model.with_structured_output(json_schema).invoke(messages)
-    return response
+        parsed = json.loads(response)
+        parsed['user_prompt'] = original_prompt
+        parsed['is_done'] = True
 
-def style_researcher(
-    state: MessagesState,
-) -> Command[Literal["stylist_advisor", "__end__"]]:
-    system_prompt = (
-        "You are a style research assistant that helps find fashion inspiration based on user preferences. "
-        "Your goal is to understand the user's style goals and search for relevant inspiration before "
-        "passing to a stylist for specific recommendations."
-        
-        "Process:"
-        "1. Create a general map of preferences based on the user's initial input. Do no request the user for more information."
-        "   - Preferred aesthetics/vibes"
-        "   - Favorite colors/patterns"
-        "   - Body type considerations" 
-        "   - Lifestyle needs"
-        "   - Budget range"
-        
-        "2. Search for inspiration by including 'SEARCH: <query>' in your response, using specific terms like:"
-        "   - '[aesthetic] outfit inspiration'"
-        "   - '[style] lookbook [season]'"
-        "   - '[body type] fashion ideas'"
-        
-        "3. After finding inspiration:"
-        "   - Summarize the key style elements found"
-        "   - Note specific pieces that could work well"
-        "   - Explain why these would suit their preferences"
-        "   - Say 'I'll ask our stylist to create specific outfit recommendations'"
-        "   - Set goto='stylist_advisor'"
-        
-        "If you need more information from the user before searching, ask clarifying questions and set goto='__end__'"
-        
-        "Never mention other agents directly in your response to the user."
-    )
+        stylist_result = run_stylist_service(parsed)
+        test = json.loads(stylist_result)
+        return {"response": test, "is_done": True}
+    else:
+        print("KEEP GOING...")
+        return {"response": state['response'], "is_done": False}
 
-    # Update the MessagesState with the system prompt.
-    messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-    response = call_llm(messages, ["stylist_advisor", "__end__"])
-    
-    if response["should_search"]:
-        print("Searching...")
+def formatter_agent(state: dict):
+    print(state['response'])
 
-        # Extract search query and add results to messages
-        search_query = re.search(r"SEARCH: (.*?)(?:\n|$)", response["response"]).group(1)
-        search = DuckDuckGoSearchResults()
-        search_results = search(search_query)
-        messages.append({"role": "assistant", "content": response["response"]})
-        messages.append(
-            {
-                "role": "system", 
-                "content": f"Search results for '{search_query}':\n{json.dumps(search_results, indent=2)}"
-            }
-        )
-        
-        # Get final response after seeing search results
-        final_response = call_llm(messages, ["stylist_advisor", "__end__"])
-        ai_msg = {"role": "ai", "content": final_response["response"], "name": "style_researcher"}
-        
-        result = Command(goto=response["goto"], update={"messages": ai_msg})
-        print(result)
-        print("\n------------------------------------\n")
+def run_test_service(prompt: str):
+    workflow = Graph()
 
-        return result
-    
-    ai_msg = {"role": "ai", "content": response["response"], "name": "style_researcher"}
-    result = Command(goto=response["goto"], update={"messages": ai_msg})
+    workflow.add_node("triage_agent", triage_agent)
+    workflow.add_node("decision_agent", decision_agent)
 
-    print(result)
-    print("\n------------------------------------\n")
+    workflow.add_edge(START, "triage_agent")
+    workflow.add_edge("triage_agent", "decision_agent")
+    workflow.add_edge("decision_agent", END)
 
-    return result
+    chain = workflow.compile()
 
-def stylist_advisor(
-    state: MessagesState,
-) -> Command[Literal["shopping_advisor", "__end__"]]:
-    system_prompt = (
-        "You are a personal stylist that creates curated outfit recommendations based on user preferences and budget. "
-        "Your task is to craft 1 complete outfit that match the user's style, season, and budget constraints. "
-        
-        "For each outfit, follow this exact format:"
-        "1. Outfit Name: A descriptive title for the look"
-        "2. Style Description: Brief explanation of the outfit's aesthetic and occasion"
-        "3. Total Budget: Breakdown of expected costs"
-        "4. Required Items: List each item needed with specific search terms in brackets, e.g.:"
-        "   - [beige wool coat parisian style]"
-        "   - [black turtleneck sweater merino wool]"
-        "   - [high waisted straight leg jeans dark wash]"
-        
-        "Guidelines:"
-        "- Use specific, searchable terms in brackets for each item"
-        "- Include color, material, and style details in search terms"
-        "- Stay within the user's total budget"
-        "- Ensure items are seasonally appropriate"
-        "- Focus on versatile, mix-and-match pieces"
-        
-        "When you need to find real items:"
-        "1. First provide your outfit recommendations with bracketed search terms"
-        "2. Then say 'I'll ask shopping_advisor to find these items'"
-        "3. Set goto='shopping_advisor'"
-        
-        "If you have complete recommendations with real items, set goto='__end__'"
-        
-        "Never mention other agents directly in your response to the user."
-    )
-    messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-    target_agent_nodes = ["shopping_advisor"]
-    response = call_llm(messages, target_agent_nodes)
-    ai_msg = {"role": "ai", "content": response["response"], "name": "shopping_advisor"}
-    result = Command(goto=response["goto"], update={"messages": ai_msg})
-
-    print(result)
-    print("\n------------------------------------\n")
-
-    return result
-
-def shopping_advisor(
-    state: MessagesState,
-) -> Command[Literal["stylist_advisor", "wardrobe_finalizer"]]:
-    system_prompt = (
-        "You are a shopping expert that helps find real clothing items based on the stylist's recommendations from the worlds top/premium brands. "
-        "When you receive outfit recommendations with bracketed search terms like [black turtleneck sweater merino wool], "
-        "your job is to:"
-        "1. Extract each bracketed search term"
-        "2. For each term, include 'SEARCH: ' followed by the search term"
-        "3. After getting search results, analyze them and provide a curated selection"
-        "4. Match items to the original outfit recommendations"
-        "5. Consider the user's budget when recommending items"
-        
-        "Format your response like this:"
-        "For [search term]:"
-        "- Item Name: (price)"
-        "- Link: product_link"
-        "- Image: product_image"
-        
-        "After finding items for all searches:"
-        "1. Summarize the complete outfits with real items"
-        "2. Provide total cost for each outfit"
-        "3. Set goto='__end__' if all items are found"
-        "4. Set goto='stylist_advisor' if you need new recommendations"
-        
-        "Set should_search=true when your response includes 'SEARCH:' queries."
-    )
-    messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-    target_agent_nodes = ["stylist_advisor", "wardrobe_finalizer"]
-    response = call_llm(messages, target_agent_nodes)
-    # Check if the response indicates a search should be performed
-    if response["should_search"] and "SEARCH:" in response["response"]:
-        # Extract all search queries
-        search_queries = [
-            query.strip()
-            for query in response["response"].split("SEARCH:")[1:]
-            if query.strip()
-        ]
-        
-        all_search_results = []
-        for query in search_queries:
-            # Get the clean query (remove any following text)
-            clean_query = query.split("\n")[0].strip()
-            search_results = find_clothing_items(clean_query)
-            all_search_results.append({
-                "query": clean_query,
-                "results": search_results
-            })
-        
-        # Add search results to messages and get new response
-        messages.append({"role": "ai", "content": response["response"]})
-        messages.append({
-            "role": "system", 
-            "content": f"Search results for all queries: {json.dumps(all_search_results)}"
-        })
-        response = call_llm(messages, target_agent_nodes)
-
-    ai_msg = {"role": "ai", "content": response["response"], "name": "shopping_advisor"}
-    result = Command(goto=response["goto"], update={"messages": ai_msg})
-
-    print(result)
-    print("\n------------------------------------\n")
-
-    return result
-
-def wardrobe_finalizer(
-    state: MessagesState,
-) -> Command[Literal["__end__"]]:
-    system_prompt = (
-        "You are a wardrobe finalizer that creates the final presentation by combining:"
-        "1. The original outfit plan from the stylist_advisor"
-        "2. The actual items found by the shopping_advisor"
-        
-        "Review the conversation history to identify:"
-        "- The original outfit concept and search terms (in brackets)"
-        "- The actual items found with their prices, links, and images"
-        
-        "IMPORTANT: Your response must ONLY contain a valid JSON object with no additional text or explanation. Use exactly this structure:"
-        
-        "{"
-        "  'original_outfit_concept': {"
-        "    'name': 'The outfit name',"
-        "    'style_description': 'Style description from stylist_advisor'"
-        "  },"
-        "  'found_items': ["
-        "    {"
-        "      'original_search_term': 'what was requested',"
-        "      'found_item': {"
-        "        'name': 'actual item name',"
-        "        'price': 'price in USD',"
-        "        'link': 'product_link',"
-        "        'image': 'product_image'"
-        "      },"
-        "      'match_analysis': 'Brief note on how well this matches the original request'"
-        "    }"
-        "  ],"
-        "  'final_summary': {"
-        "    'total_cost': 'total in USD',"
-        "    'original_budget': 'budget in USD',"
-        "    'budget_status': {"
-        "      'status': 'under/over',"
-        "      'difference': 'amount in USD'"
-        "    },"
-        "    'styling_instructions': 'How to wear these specific items together',"
-        "    'care_instructions': 'Specific to the actual items found'"
-        "  },"
-        "  'shopping_recommendations': {"
-        "    'priority_pieces': ['list of items to prioritize'],"
-        "    'potential_savings': ['areas where savings could be found'],"
-        "    'alternative_options': ['recommended alternatives if needed']"
-        "  }"
-        "}"
-        
-        "Do not include any other text, explanations, or formatting - only output the JSON object."
-    )
-    
-    messages = [{"role": "system", "content": system_prompt}] + state["messages"]
-    target_agent_nodes = ["__end__"]
-    response = call_llm(messages, target_agent_nodes)
-    
-    ai_msg = {"role": "ai", "content": response["response"], "name": "wardrobe_finalizer"}
-    result = Command(goto=response["goto"], update={"messages": ai_msg})
-
-    print(result)
-    print("\n------------------------------------\n")
-
-    return result
-
-# Update the graph builder to include the new agent
-builder = StateGraph(MessagesState)
-builder.add_node("stylist_advisor", stylist_advisor)
-builder.add_node("shopping_advisor", shopping_advisor)
-builder.add_node("wardrobe_finalizer", wardrobe_finalizer)
-builder.add_node("style_researcher", style_researcher)
-
-# Update the edges to include the new flow
-builder.add_edge(START, "style_researcher")
-builder.add_edge("style_researcher", "stylist_advisor")
-builder.add_edge("stylist_advisor", "shopping_advisor")
-builder.add_edge("shopping_advisor", "wardrobe_finalizer")
-builder.add_edge("wardrobe_finalizer", END)
-
-graph = builder.compile()
-
-result = graph.invoke({
-    "messages": [
-        (
-            "user",
-            "I am looking for a new outfit for the winter. I like neutral colors and prefer a Parisian chic style. My budget is $1000.",
-        )
-    ]
-})
-
-# The final message will be the last message in the chain
-final_message = result["messages"][-1]
-# Since it's JSON, you might want to parse it
-print(final_message)
-print("\n------------------------------------\n")
-print(result["messages"])
-# final_result = json.loads(final_message.content)
-# print(json.dumps(final_result, indent=2))
-
+    result = chain.invoke(prompt)
+    return json.dumps(result)
