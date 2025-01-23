@@ -61,9 +61,13 @@ async def get_stylist(request: Request):
 @app.post("/test")
 async def test(request: Request):
     try:
-        data = await request.json()
-        test_result = run_test_service(data)
+        # data = await request.json()
+        # test_result = run_test_service(data)
+        # return test_result
+        with open('test_response.json', 'r') as f:
+            test_result = f.read()
         return test_result
+
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))

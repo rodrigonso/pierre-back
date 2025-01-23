@@ -148,7 +148,6 @@ def shopping_agent(state: dict):
     outfits = parsed["outfits"]
     search_queries = [(item["search_query"], item["type"]) for outfit in outfits for item in outfit["items"]]
 
-
     # Perform parallel searches using ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=50) as executor:
         future_to_query = {
@@ -162,30 +161,7 @@ def shopping_agent(state: dict):
             if result:
                 formatted_results.append(result)
 
-        print(formatted_results)
-        prompt = [{
-            "role": "system",
-            "content": f"As a fashion shopping curator, your sole purpose is to curate the shopping results to find the best match given the user's desired preferences and the wardrobe plan provided by our stylist.\n"
-                       f"You are to select ONLY ONE clothing item from each category. Feel free to use all the information provided to you in order to pick the item that will best match the requirements.\n"
-                       f"Your response should be in JSON format and be an array of product ids that represent your selected products.\n"
-                       f'Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers. \n'
-        }, {
-            "role": "user",
-            "content": f"User gender: {user_gender}\n"
-                       f"User prompt: {user_prompt}\n"
-                       f"Stylist plan: {wardrobe_plan}\n"
-                       f"Search results: {formatted_results}\n"
-        }]
 
-    converted = convert_openai_messages(prompt)
-    response = model.invoke(converted).content
-
-    formatted_test_ids = json.loads(response)
-
-    for index, piece in enumerate(formatted_results):
-        # Assuming pieces is a list of dictionaries and formatted_test_ids is a set or list
-        filtered_pieces = [i for i in piece if i['product_id'] in formatted_test_ids]
-        formatted_results[index] = filtered_pieces[0]
 
     return {"user_gender": state["user_gender"], "user_prompt": state["user_prompt"], "wardrobe_plan": state["wardrobe_plan"], "shopping_results": formatted_results}
 
@@ -202,7 +178,7 @@ def formatter_agent(state: dict):
     user_prompt = state["user_prompt"]
 
     # Create a mapping of search queries to shopping results
-    shopping_map = {result["query"]: result for result in shopping_results}
+    shopping_map = {result["search_query"]: result["search_results"] for result in shopping_results}
 
     # Create formatted output
     formatted_output = {
@@ -221,20 +197,12 @@ def formatter_agent(state: dict):
         # Match each item with its shopping result
         for item in outfit["items"]:
             search_query = item["search_query"]
-            shopping_result = shopping_map.get(search_query)
-            
+            item_results = shopping_map.get(search_query, [])
+
             formatted_item = {
                 "type": item["type"],
                 "search_query": search_query,
-                "product": shopping_result if shopping_result else {
-                    "product_id": None,
-                    "product_title": "No product found",
-                    "product_price": "N/A",
-                    "product_link": None,
-                    "product_image": None,
-                    "product_source": None,
-                    "product_description": None
-                }
+                "products": item_results if item_results else []
             }
             formatted_outfit["items"].append(formatted_item)
 
@@ -263,7 +231,7 @@ def search_single_item(query: str, type: str) -> dict:
         shopping_results = results.get("shopping_results", [])
 
         if shopping_results:
-            final_results = []
+            final_results = {"search_query": query, "search_results": []}
             items = shopping_results[:5]  # Get the first 5 items
             for item in items:  # Iterate over the first 5 items
                 import requests
@@ -275,18 +243,18 @@ def search_single_item(query: str, type: str) -> dict:
                 # print(test_description)
 
                 result = {
+                    "id": item.get("product_id"),
                     "query": query,
-                    "product_title": item.get("title"),
-                    "product_price": item.get("price"),
-                    "product_id": item.get("product_id"),
-                    "product_link": item.get("product_link"),
-                    "product_images": item.get("thumbnails"),
-                    "product_source": item.get("source"),
-                    "product_type": type,
-                    "product_description": test_description
+                    "title": item.get("title"),
+                    "price": item.get("price"),
+                    "link": item.get("link"),
+                    "images": item.get("thumbnails"),
+                    "source": item.get("source"),
+                    "description": test_description,
+                    "type": type
                 }
 
-                final_results.append(result)
+                final_results["search_results"].append(result)
             return final_results
 
     except Exception as e:
