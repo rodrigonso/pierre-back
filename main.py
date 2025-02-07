@@ -9,6 +9,7 @@ import os
 from stylist_service import run_stylist_service
 from test import run_test_service
 from supabase import create_client, Client
+from pydantic import BaseModel
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,26 +28,26 @@ app.add_middleware(
 )
 
 # Add request authentication middleware
-# @app.middleware("http")
-# async def add_authentication(request: Request, call_next):
+@app.middleware("http")
+async def add_authentication(request: Request, call_next):
 
-#     if request.method == "OPTIONS":
-#         return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
 
-#     token = request.headers.get("authorization", "").replace("Bearer ", "")
+    token = request.headers.get("authorization", "").replace("Bearer ", "")
 
-#     if not token:
-#         return Response("Unauthorized", status_code=401)
+    if not token:
+        return Response("Unauthorized", status_code=401)
 
-#     try:
-#         auth = supabase.auth.get_user(token)
-#         request.state.user_id = auth.user.id
-#         supabase.postgrest.auth(token)
+    try:
+        auth = supabase.auth.get_user(token)
+        request.state.user_id = auth.user.id
+        supabase.postgrest.auth(token)
 
-#     except Exception:
-#         return Response("Invalid user token", status_code=401)
+    except Exception:
+        return Response("Invalid user token", status_code=401)
 
-#     return await call_next(request)
+    return await call_next(request)
 
 @app.post("/stylist")
 async def get_stylist(request: Request):
@@ -59,22 +60,35 @@ async def get_stylist(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/test")
-async def test(request: Request):
+async def get_stylist_test(request: Request):
     try:
-        # data = await request.json()
-        # test_result = run_test_service(data)
-        # return test_result
         with open('test_response.json', 'r') as f:
             test_result = f.read()
-        return test_result
+            return test_result
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class DevRequest(BaseModel):
+    user_gender: str
+    user_favorite_brands: list
+    user_prompt: str
+
+@app.post("/dev")
+async def test(request: DevRequest):
+    try:
+        test = await run_test_service(request.user_prompt, request.user_gender, request.user_favorite_brands)
+        print(test)
+        return test.model_dump_json()
 
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

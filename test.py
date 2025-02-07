@@ -1,109 +1,136 @@
-from typing import Literal
-
-from langgraph.graph import START, END
-from langgraph.prebuilt import ToolNode
-from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_community.adapters.openai import convert_openai_messages
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
-from langgraph.graph import Graph
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from serpapi import GoogleSearch
-from typing import List
+from datetime import datetime, timedelta
+import uuid
 from dotenv import load_dotenv
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.models.openai import OpenAIModel
+from typing import List, Optional, Literal
+from pydantic import BaseModel, Field, HttpUrl
+from serpapi import GoogleSearch
 import os
+import requests
 import json
-from stylist_service import run_stylist_service
 
-memory = {'test123': ''}
-original_prompt = ""
-model = ChatOpenAI(model="gpt-4o", max_retries=1)
 
 load_dotenv()
 
-def triage_agent(user_data: dict):
+model = OpenAIModel('gpt-4o')
+
+class Product(BaseModel):
+    id: str
+    query: str
+    title: str
+    price: str
+    link: str
+    images: List[str]
+    source: str
+    type: str
+    description: str
+
+class Item(BaseModel):
+    type: str
+    search_query: str
+    products: List[Product]
+
+class Outfit(BaseModel):
+    name: str
+    description: str
+    items: List[Item]
+
+class OutfitPlan(BaseModel):
+    user_prompt: str
+    outfits: List[Outfit]
+
+class ProductSearch(BaseModel):
+    query: str
+    product_type: str
+
+class UserPreferences(BaseModel):
+    gender: str
+    favorite_brands: str
+
+async def go_shopping(product_search: ProductSearch) -> list[Product]:
+    """Given a product query, it will search the internet for the desired item based on the query
+        and return a list of items found.
+
+    Args:
+        queries: An object containing information about the desired product 
     """
-    Generates a prompt for the 'search_agent' to use during the search phase based on the user's initial prompt.
-    :param user_query: The user's initial prompt.
-    :return: A prompt for the 'search_agent' to use during the search phase.
+    params = {
+        "engine": "google_shopping",
+        "q": product_search.query,
+        "api_key": os.getenv("SERPAPI_API_KEY"),
+        "num": 5,
+        "hl": "en",
+        "gl": "us",
+        "location": "United States",
+        "direct_link": True
+    }
+
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    shopping_results = results.get("shopping_results", [])
+
+    if shopping_results:
+
+            final_results = {"search_query": product_search.query, "search_results": []}
+            items = shopping_results[:5]  # Get the first 5 items
+
+            for item in items:  # Iterate over the first 5 items
+
+                extra_info_url = item.get("serpapi_product_api")
+                extra_info_response = requests.get(extra_info_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
+                extra_info = extra_info_response.json()
+                extra_info_results = extra_info.get("product_results", {})
+
+                result = Product(
+                    id=item.get("product_id", "MISSING_PRODUCT_ID"),
+                    query=product_search.query,
+                    title=item.get("title", "MISSING_PRODUCT_TITLE"),
+                    price=item.get("price", "MISSING_PRODUCT_PRICE"),
+                    link=item.get("link", "MISSING_PRODUCT_LINK"),
+                    images=item.get("thumbnails", ["MISSING_PRODUCT_THUMBNAILS"]),
+                    source=item.get("source", "MISSING_PRODUCT_SOURCE"),
+                    description=extra_info_results.get("description", "MISSING_PRODUCT_DESCRIPTION"),
+                    type=product_search.product_type
+                )
+
+                final_results["search_results"].append(result)
+
+            return final_results
+
+system_prompt = f"""
+    You are a highly skilled and intuitive personal stylist with a deep understanding of fashion trends, brand aesthetics, and individual style preferences.\n
+    Your primary goal is to create personalized outfit plans that align with the user's unique taste, gender, and favorite brands.\n
+"""
+
+stylist_agent = Agent(
+    model,
+    result_type=OutfitPlan,
+    deps_type=UserPreferences,
+    system_prompt=system_prompt
+)
+
+@stylist_agent.system_prompt
+async def add_customer_preferences(ctx: RunContext[UserPreferences]) -> str:
+    return f"""
+    User gender: {ctx.deps.gender}
+    User favorite brands: {ctx.deps.favorite_brands}
     """
-    print("RESEARCH_AGENT")
 
-    original_prompt = user_data['user_prompt']
+async def run_test_service(user_prompt: str, user_gender: str, user_favorite_brands: list):
+    user_preferences = UserPreferences(
+        gender=user_gender,
+        favorite_brands=" ".join(user_favorite_brands)
+    )
 
-    prompt = [{
-        "role": "system",
-        "content": f"As a helpful fashion asistant, your role is to chat with the user and collect information that will help our professional Stylist better serve our user. You need to collect the following information: \n"
-                   f"- User gender\n"
-                   f"- User style\n"
-                   f"- User favorite brands\n"
-                   f"Once the user provided ALL of the required information listed above, you should thank the user and add a [STOP] at the end of your response. Only add a [STOP] at the end of your response when you have ALL of the required information.\n"
-                   f"Please try to keep your responses brief and do not reiterate the information the user provided.\n"
-    }, {
-        "role": "user",
-        "content":  f"User prompt: {user_data['user_prompt']}"
-                    f"Chat history: {memory['test123']}"
-    }]
+    result = await stylist_agent.run(user_prompt, deps=user_preferences)
+    data = result.data
 
-    converted = convert_openai_messages(prompt)
-    response = model.invoke(converted).content
+    for outfit in data.outfits:
+        for item in outfit.items:
+            print(item)
+            shopping_results = await go_shopping(ProductSearch(query=item.search_query, product_type=item.type))
+            print(shopping_results)
+            item.products = shopping_results
 
-    memory['test123'] += f"User: {user_data['user_prompt']}\nAiResponse: {response}\n"
-
-    return {"response": response, "user_message": user_data['user_prompt']}
-
-def decision_agent(state: dict):
-    print(state['response'])
-
-    if ("[STOP]" in state['response']):
-        print("DONE!")
-        prompt = [{
-            "role": "system",
-            "content": f"Your only job is to accurately extract the following information about the user: \n"
-                    f"- User gender\n"
-                    f"- User style\n"
-                    f"- User favorite brands\n"
-                    f"Your response should be in JSON and be in the following format: \n"
-                    f"{{\n"
-                    f'    "user_gender": "<the gender of the user>",\n'
-                    f'    "user_brands": "<an array with the user preferred brands>",\n'
-                    f'    "user_style": "<the style the user wants>"\n'
-                    f"}}\n"
-                    f'Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers. \n'
-        }, {
-            "role": "user",
-            "content":  f"User prompt: {state['response']}"
-                        f"Chat history: {memory['test123']}"
-        }]
-
-        converted = convert_openai_messages(prompt)
-        response = model.invoke(converted).content
-
-        parsed = json.loads(response)
-        parsed['user_prompt'] = original_prompt
-        parsed['is_done'] = True
-
-        stylist_result = run_stylist_service(parsed)
-        test = json.loads(stylist_result)
-        return {"response": test, "is_done": True}
-    else:
-        print("KEEP GOING...")
-        return {"response": state['response'], "is_done": False}
-
-def formatter_agent(state: dict):
-    print(state['response'])
-
-def run_test_service(prompt: str):
-    workflow = Graph()
-
-    workflow.add_node("triage_agent", triage_agent)
-    workflow.add_node("decision_agent", decision_agent)
-
-    workflow.add_edge(START, "triage_agent")
-    workflow.add_edge("triage_agent", "decision_agent")
-    workflow.add_edge("decision_agent", END)
-
-    chain = workflow.compile()
-
-    result = chain.invoke(prompt)
-    return json.dumps(result)
+    return outfit

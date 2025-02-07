@@ -1,5 +1,9 @@
-from typing import Literal
+import os
+import json
+import requests
+import json
 
+from typing import Literal
 from langgraph.graph import START, END
 from langgraph.prebuilt import ToolNode
 from langchain_community.tools import DuckDuckGoSearchResults
@@ -11,11 +15,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
 from typing import List
 from dotenv import load_dotenv
-import os
-import json
 
 model = ChatOpenAI(model="gpt-4o", max_retries=1)
-num_of_outfits = 1
+num_of_outfits = 5
 
 load_dotenv()
 
@@ -25,21 +27,23 @@ def research_agent(user_data: dict):
     :param user_query: The user's initial prompt.
     :return: A prompt for the 'search_agent' to use during the search phase.
     """
-    print("RESEARCH_AGENT")
+    print("[research_agent] starting...")
     user_prompt = user_data["user_prompt"]
     user_gender = user_data["user_gender"]
 
     prompt = [{
         "role": "system",
-        "content": "As a fashion researcher, your sole purpose is to craft a prompt that will help the 'search_agent' find the best articles for outfit inspirations based on the user's style preferences, gender, budget, and any other user-specific information. Try to use as few words as possible without losing the context. "
+        "content": "As a fashion researcher, your sole purpose is to craft a prompt that will help the 'search_agent' find the best articles for outfit inspirations based on the user's style preferences, gender, budget, and any other user-specific information.  Try to use as few words as possible without losing the context.\n"
     }, {
         "role": "user",
         "content":  f"User gender: {user_gender}\n"
                     f"User prompt: {user_prompt}\n."
+                    f"User preferred brands: Zara, Reformation, Gucci, Anthropology, Aritzia, Mango"
     }]
 
     converted = convert_openai_messages(prompt)
     response = model.invoke(converted).content
+    print("[research_agent] done!")
 
     return {"user_prompt": user_prompt, "user_gender": user_gender, "research_prompt": response}
 
@@ -49,12 +53,14 @@ def search_agent(state: dict):
     :param query: The user's initial prompt.
     :return: The search results.
     """
-    print("SEARCH_AGENT")
+    print("[search_agent] starting...")
     # Remove extra quotes if present
     query = state["research_prompt"].strip("'\"")
     
     search = DuckDuckGoSearchResults()
     results = search.run(query)
+
+    print("[search_agent] done!")
 
     return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "curated_articles": results}
 
@@ -65,14 +71,15 @@ def curator_agent(state: dict):
     :param search_results: The search results.
     :return: The curated articles.
     """
-    print("CURATOR_AGENT")
+    print("[curator_agent] starting...")
+
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
     search_results = state["search_results"]
 
     prompt = [{
         "role": "system",
-        "content": f"As a fashion curator, your sole purpose is to curate relevant articles from the search results and choose the best ones based on the user's initial prompt and gender.\n"
+        "content": f"As a fashion curator, your sole purpose is to curate relevant articles from the search results and choose the best ones based on the user's preferences (like gender, brands, etc).\n"
                    f"You should look for more current content and from trusted sources.\n"
     }, {
         "role": "user",
@@ -84,7 +91,7 @@ def curator_agent(state: dict):
 
     converted = convert_openai_messages(prompt)
     response = model.invoke(converted).content
-    print(response)
+    print("[curator_agent] done!")
 
     return {"user_prompt": user_prompt, "user_gender": user_gender, "curated_articles": response}
 
@@ -94,7 +101,7 @@ def stylist_agent(state: dict):
     :param state: The state of the graph.
     :return: The wardrobe plan.
     """
-    print("STYLIST_AGENT")
+    print("[stylist_agent] starting...")
 
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
@@ -102,7 +109,8 @@ def stylist_agent(state: dict):
 
     prompt = [{
         "role": "system",
-        "content": f'As a personal fashion stylist, your sole purpose is to create a a list of outfits based on the user\'s style preferences, gender, budget, and any other user-specific information. You MUST choose from top/premium brands that are available online and craft your list based on the information found in the curated style articles.\n'
+        "content": f'As a personal fashion stylist, your sole purpose is to create a a list of outfits based on the user\'s style preferences, gender, budget, and any other user-specific information.\n'
+                   f'You MUST choose from top/premium brands that are available online and craft your list based on the information found in the curated style articles.\n'
                    f'You need to create {num_of_outfits} complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
                    f'Please return your response in this exact JSON string format:\n'
                    f'{{\n'
@@ -130,6 +138,8 @@ def stylist_agent(state: dict):
     converted = convert_openai_messages(prompt)
     response = model.invoke(converted).content
 
+    print("[stylist_agent] done!")
+
     return {"user_gender": user_gender, "user_prompt": user_prompt, "wardrobe_plan": response}
 
 def shopping_agent(state: dict):
@@ -137,7 +147,8 @@ def shopping_agent(state: dict):
     Creates a shopping list based on the user's prompts and the stylist's outfits.
     Performs searches in parallel.
     """
-    print("SHOPPING_AGENT")
+    print("[shopping_agent] starting...")
+
     # Extract search queries from stylist_outfits
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
@@ -162,6 +173,7 @@ def shopping_agent(state: dict):
                 formatted_results.append(result)
 
 
+    print("[shopping_agent] done!")
 
     return {"user_gender": state["user_gender"], "user_prompt": state["user_prompt"], "wardrobe_plan": state["wardrobe_plan"], "shopping_results": formatted_results}
 
@@ -171,7 +183,7 @@ def formatter_agent(state: dict):
     :param state: Contains wardrobe_plan, shopping_results, and user_prompt
     :return: Formatted wardrobe plan with shopping results
     """
-    print("FORMATTER_AGENT")
+    print("[formatter_agent] starting...")
 
     wardrobe_plan = json.loads(state["wardrobe_plan"])
     shopping_results = state["shopping_results"]
@@ -208,6 +220,7 @@ def formatter_agent(state: dict):
 
         formatted_output["outfits"].append(formatted_outfit)
 
+    print("[formatter_agent] done!")
     return formatted_output
 
 def search_single_item(query: str, type: str) -> dict:
@@ -231,26 +244,26 @@ def search_single_item(query: str, type: str) -> dict:
         shopping_results = results.get("shopping_results", [])
 
         if shopping_results:
+
             final_results = {"search_query": query, "search_results": []}
             items = shopping_results[:5]  # Get the first 5 items
+
             for item in items:  # Iterate over the first 5 items
-                import requests
-                import json
-                test_url = item.get("serpapi_product_api")
-                test_response = requests.get(test_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
-                test_formatted = test_response.json()
-                test_description = test_formatted.get("product_results", {}).get("description", "Description not found")
-                # print(test_description)
+
+                extra_url = item.get("serpapi_product_api")
+                extra_response = requests.get(extra_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
+                extra_parsed = extra_response.json()
+                extra_data = extra_parsed.get("product_results", {})
 
                 result = {
-                    "id": item.get("product_id"),
+                    "id": item.get("product_id", "Product id not found"),
                     "query": query,
-                    "title": item.get("title"),
-                    "price": item.get("price"),
-                    "link": item.get("link"),
-                    "images": item.get("thumbnails"),
-                    "source": item.get("source"),
-                    "description": test_description,
+                    "title": item.get("title", "Title not found"),
+                    "price": item.get("price", "Price not found"),
+                    "link": item.get("link", "Link not found"),
+                    "images": item.get("thumbnails", []),
+                    "source": item.get("source", "Source not found"),
+                    "description": extra_data.get("description", "Description not found"),
                     "type": type
                 }
 
@@ -280,5 +293,7 @@ def run_stylist_service(user_data: dict):
 
     chain = workflow.compile()
 
+    print("[stylist_service] start.")
     result = chain.invoke(user_data)
+    print("[stylist_service] exit.")
     return json.dumps(result)

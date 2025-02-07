@@ -10,3 +10,5 @@ duckduckgo-search
 google-search-results
 supabase
 python-jose[cryptography]
+scikit-learn
+pandas
