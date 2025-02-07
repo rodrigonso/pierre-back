@@ -16,10 +16,11 @@ from serpapi import GoogleSearch
 from typing import List
 from dotenv import load_dotenv
 
+load_dotenv()
+
 model = ChatOpenAI(model="gpt-4o", max_retries=1)
 num_of_outfits = 5
 
-load_dotenv()
 
 def research_agent(user_data: dict):
     """
