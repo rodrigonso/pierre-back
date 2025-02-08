@@ -3,17 +3,13 @@ import json
 import requests
 import json
 
-from typing import Literal
 from langgraph.graph import START, END
-from langgraph.prebuilt import ToolNode
 from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_community.adapters.openai import convert_openai_messages
 from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
 from langgraph.graph import Graph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
-from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
