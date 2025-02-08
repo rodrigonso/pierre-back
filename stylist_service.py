@@ -27,22 +27,23 @@ def research_agent(user_data: dict):
     print("[research_agent] starting...")
     user_prompt = user_data["user_prompt"]
     user_gender = user_data["user_gender"]
+    user_brands = ['Zara', 'Reformation', 'Gucci', 'Anthropology', 'Aritzia', 'Mango', 'Nordstrom']
 
     prompt = [{
         "role": "system",
         "content": "As a fashion researcher, your sole purpose is to craft a prompt that will help the 'search_agent' find the best articles for outfit inspirations based on the user's style preferences, gender, budget, and any other user-specific information.  Try to use as few words as possible without losing the context.\n"
     }, {
         "role": "user",
-        "content":  f"User gender: {user_gender}\n"
-                    f"User prompt: {user_prompt}\n."
-                    f"User preferred brands: Zara, Reformation, Gucci, Anthropology, Aritzia, Mango"
+        "content":  f"User gender: {user_gender}.\n"
+                    f"User prompt: {user_prompt}.\n"
+                    f"User preferred brands: {', '.join(user_brands)}.\n"
     }]
 
     converted = convert_openai_messages(prompt)
     response = model.invoke(converted).content
     print("[research_agent] done!")
 
-    return {"user_prompt": user_prompt, "user_gender": user_gender, "research_prompt": response}
+    return {"user_prompt": user_prompt, "user_gender": user_gender, "user_brands": user_brands, "research_prompt": response}
 
 def search_agent(state: dict):
     """
@@ -59,7 +60,7 @@ def search_agent(state: dict):
 
     print("[search_agent] done!")
 
-    return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "curated_articles": results}
+    return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "user_brands": state["user_brands"], "research_prompt": state["research_prompt"], "curated_articles": results}
 
 def curator_agent(state: dict):
     """
@@ -72,6 +73,9 @@ def curator_agent(state: dict):
 
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
+    user_brands = state["user_brands"]
+    research_prompt = state["research_prompt"]
+
     search_results = state["search_results"]
 
     prompt = [{
@@ -81,7 +85,8 @@ def curator_agent(state: dict):
     }, {
         "role": "user",
         "content": f"User gender: {user_gender}\n"
-                   f"User prompt: {user_prompt}\n"
+                   f"User prompt: {research_prompt}\n"
+                   f"User preferred brands: {', '.join(user_brands)}\n"
                    f"Search results: {search_results}\n"
                    f"Please only return the articles that are relevant to the user.\n"
     }]
@@ -90,7 +95,7 @@ def curator_agent(state: dict):
     response = model.invoke(converted).content
     print("[curator_agent] done!")
 
-    return {"user_prompt": user_prompt, "user_gender": user_gender, "curated_articles": response}
+    return {"user_prompt": user_prompt, "user_gender": user_gender, "user_brands": user_brands, "research_prompt": research_prompt, "curated_articles": response}
 
 def stylist_agent(state: dict):
     """
@@ -103,6 +108,7 @@ def stylist_agent(state: dict):
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
     curated_articles = state["curated_articles"]
+    research_prompt = state["research_prompt"]
 
     prompt = [{
         "role": "system",
@@ -128,7 +134,7 @@ def stylist_agent(state: dict):
     }, {
         "role": "user",
         "content": f"User gender: {user_gender}\n."
-                   f"User prompt: {user_prompt}\n."
+                   f"User prompt: {research_prompt}\n."
                    f"Curated articles: {curated_articles}\n."
     }]
 

@@ -28,26 +28,26 @@ app.add_middleware(
 )
 
 # Add request authentication middleware
-@app.middleware("http")
-async def add_authentication(request: Request, call_next):
+# @app.middleware("http")
+# async def add_authentication(request: Request, call_next):
 
-    if request.method == "OPTIONS":
-        return await call_next(request)
+#     if request.method == "OPTIONS":
+#         return await call_next(request)
 
-    token = request.headers.get("authorization", "").replace("Bearer ", "")
+#     token = request.headers.get("authorization", "").replace("Bearer ", "")
 
-    if not token:
-        return Response("Unauthorized", status_code=401)
+#     if not token:
+#         return Response("Unauthorized", status_code=401)
 
-    try:
-        auth = supabase.auth.get_user(token)
-        request.state.user_id = auth.user.id
-        supabase.postgrest.auth(token)
+#     try:
+#         auth = supabase.auth.get_user(token)
+#         request.state.user_id = auth.user.id
+#         supabase.postgrest.auth(token)
 
-    except Exception:
-        return Response("Invalid user token", status_code=401)
+#     except Exception:
+#         return Response("Invalid user token", status_code=401)
 
-    return await call_next(request)
+#     return await call_next(request)
 
 @app.post("/stylist")
 async def get_stylist(request: Request):
