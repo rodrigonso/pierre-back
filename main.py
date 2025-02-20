@@ -47,13 +47,18 @@ app.add_middleware(
 #     except Exception:
 #         return Response("Invalid user token", status_code=401)
 
-#     return await call_next(request)
+#     return await call_next(request)\
+
+class StylistRequest(BaseModel):
+    user_gender: str
+    user_prompt: str
+    user_preferred_brands: list
+    num_of_outfits: int
 
 @app.post("/stylist")
 async def get_stylist(request: Request):
     try:
-        data = await request.json()
-        stylist_result = run_stylist_service(data)
+        stylist_result = run_stylist_service(request)
         return stylist_result
     except Exception as e:
         print(e)
@@ -71,13 +76,13 @@ async def get_stylist_test(request: Request):
 
 class DevRequest(BaseModel):
     user_gender: str
-    user_favorite_brands: list
+    user_preferred_brands: list
     user_prompt: str
 
 @app.post("/dev")
 async def test(request: DevRequest):
     try:
-        test = await run_test_service(request.user_prompt, request.user_gender, request.user_favorite_brands)
+        test = await run_test_service(request.user_prompt, request.user_gender, request.user_preferred_brands)
         print(test)
         return test.model_dump_json()
 

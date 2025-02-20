@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 model = ChatOpenAI(model="gpt-4o", max_retries=1)
-num_of_outfits = 5
-
 
 def research_agent(user_data: dict):
     """
@@ -27,7 +25,7 @@ def research_agent(user_data: dict):
     print("[research_agent] starting...")
     user_prompt = user_data["user_prompt"]
     user_gender = user_data["user_gender"]
-    user_brands = ['Zara', 'Reformation', 'Gucci', 'Anthropology', 'Aritzia', 'Mango', 'Nordstrom']
+    user_preferred_brands = user_data["user_preferred_brands"]
 
     prompt = [{
         "role": "system",
@@ -36,14 +34,14 @@ def research_agent(user_data: dict):
         "role": "user",
         "content":  f"User gender: {user_gender}.\n"
                     f"User prompt: {user_prompt}.\n"
-                    f"User preferred brands: {', '.join(user_brands)}.\n"
+                    f"User preferred brands: {', '.join(user_preferred_brands)}.\n"
     }]
 
     converted = convert_openai_messages(prompt)
     response = model.invoke(converted).content
     print("[research_agent] done!")
 
-    return {"user_prompt": user_prompt, "user_gender": user_gender, "user_brands": user_brands, "research_prompt": response}
+    return {**user_data, "research_prompt": response}
 
 def search_agent(state: dict):
     """
@@ -60,7 +58,7 @@ def search_agent(state: dict):
 
     print("[search_agent] done!")
 
-    return {"user_prompt": state["user_prompt"], "user_gender": state["user_gender"], "user_brands": state["user_brands"], "research_prompt": state["research_prompt"], "curated_articles": results}
+    return {**state, "curated_articles": results}
 
 def curator_agent(state: dict):
     """
@@ -73,9 +71,8 @@ def curator_agent(state: dict):
 
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
-    user_brands = state["user_brands"]
+    user_preferred_brands = state["user_preferred_brands"]
     research_prompt = state["research_prompt"]
-
     search_results = state["search_results"]
 
     prompt = [{
@@ -86,7 +83,7 @@ def curator_agent(state: dict):
         "role": "user",
         "content": f"User gender: {user_gender}\n"
                    f"User prompt: {research_prompt}\n"
-                   f"User preferred brands: {', '.join(user_brands)}\n"
+                   f"User preferred brands: {', '.join(user_preferred_brands)}\n"
                    f"Search results: {search_results}\n"
                    f"Please only return the articles that are relevant to the user.\n"
     }]
@@ -95,7 +92,7 @@ def curator_agent(state: dict):
     response = model.invoke(converted).content
     print("[curator_agent] done!")
 
-    return {"user_prompt": user_prompt, "user_gender": user_gender, "user_brands": user_brands, "research_prompt": research_prompt, "curated_articles": response}
+    return {**state, "curated_articles": response}
 
 def stylist_agent(state: dict):
     """
@@ -109,6 +106,7 @@ def stylist_agent(state: dict):
     user_gender = state["user_gender"]
     curated_articles = state["curated_articles"]
     research_prompt = state["research_prompt"]
+    num_of_outfits = state["num_of_outfits"]
 
     prompt = [{
         "role": "system",
@@ -143,7 +141,7 @@ def stylist_agent(state: dict):
 
     print("[stylist_agent] done!")
 
-    return {"user_gender": user_gender, "user_prompt": user_prompt, "wardrobe_plan": response}
+    return {**state, "wardrobe_plan": response}
 
 def shopping_agent(state: dict):
     """
@@ -163,7 +161,7 @@ def shopping_agent(state: dict):
     search_queries = [(item["search_query"], item["type"]) for outfit in outfits for item in outfit["items"]]
 
     # Perform parallel searches using ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=50) as executor:
+    with ThreadPoolExecutor(max_workers=100) as executor:
         future_to_query = {
             executor.submit(search_single_item, query, item_type): (query, item_type) 
             for query, item_type in search_queries
@@ -178,7 +176,7 @@ def shopping_agent(state: dict):
 
     print("[shopping_agent] done!")
 
-    return {"user_gender": state["user_gender"], "user_prompt": state["user_prompt"], "wardrobe_plan": state["wardrobe_plan"], "shopping_results": formatted_results}
+    return {**state, "shopping_results": formatted_results}
 
 def formatter_agent(state: dict):
     """

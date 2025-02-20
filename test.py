@@ -82,6 +82,8 @@ async def go_shopping(product_search: ProductSearch) -> list[Product]:
                 extra_info = extra_info_response.json()
                 extra_info_results = extra_info.get("product_results", {})
 
+                print(extra_info)
+
                 result = Product(
                     id=item.get("product_id", "MISSING_PRODUCT_ID"),
                     query=product_search.query,
