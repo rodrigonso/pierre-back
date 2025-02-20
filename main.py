@@ -58,7 +58,7 @@ class StylistRequest(BaseModel):
 @app.post("/stylist")
 async def get_stylist(request: StylistRequest):
     try:
-        stylist_result = run_stylist_service(request)
+        stylist_result = run_stylist_service(request.model_dump())
         return stylist_result
     except Exception as e:
         print(e)
