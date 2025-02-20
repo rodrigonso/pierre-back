@@ -56,7 +56,7 @@ class StylistRequest(BaseModel):
     num_of_outfits: int
 
 @app.post("/stylist")
-async def get_stylist(request: Request):
+async def get_stylist(request: StylistRequest):
     try:
         stylist_result = run_stylist_service(request)
         return stylist_result
