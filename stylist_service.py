@@ -11,6 +11,7 @@ from langgraph.graph import Graph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
+from models import ProductResponse, ProductInfo, SellerInfo
 
 load_dotenv()
 
@@ -224,6 +225,41 @@ def formatter_agent(state: dict):
     print("[formatter_agent] done!")
     return formatted_output
 
+def extract_product_data(response_json) -> ProductResponse:
+    """
+    Extract relevant product and seller information from the API response
+    """
+    product_data = response_json.get('product_results', {})
+    seller_data = response_json.get('sellers_results', {})
+    
+    # Extract online sellers info
+    online_sellers = seller_data.get('online_sellers', [])
+    seller_info = SellerInfo()
+    if online_sellers:
+        first_seller = online_sellers[0]
+        seller_info = SellerInfo(
+            seller_name=first_seller.get('name'),
+            direct_link=first_seller.get('direct_link'),
+            base_price=first_seller.get('base_price'),
+            shipping=first_seller.get('additional_price', {}).get('shipping'),
+            total_price=first_seller.get('total_price'),
+            delivery_info=[detail.get('text') for detail in first_seller.get('details_and_offers', [])]
+        )
+
+    # Extract product info
+    product_info = ProductInfo(
+        product_id=product_data.get('product_id'),
+        title=product_data.get('title'),
+        description=product_data.get('description'),
+        conditions=product_data.get('conditions', []),
+        prices=product_data.get('prices', []),
+        images=[media.get('link') for media in product_data.get('media', []) if media.get('type') == 'image'],
+        extensions=product_data.get('extensions', []),
+        sizes=list(product_data.get('sizes', {}).keys())
+    )
+
+    return ProductResponse(product=product_info, seller=seller_info)
+
 def search_single_item(query: str, type: str) -> dict:
     """
     Perform a single search for an item
@@ -254,17 +290,18 @@ def search_single_item(query: str, type: str) -> dict:
                 rich_url = item.get("serpapi_product_api")
                 rich_response = requests.get(rich_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
                 rich_response_parsed = rich_response.json()
-                rich_data = rich_response_parsed.get("product_results", {})
+
+                rich_product_info = extract_product_data(rich_response_parsed)
 
                 result = {
-                    "id": item.get("product_id", "Product id not found"),
+                    "id": rich_product_info.product.product_id,
                     "query": query,
-                    "title": item.get("title", "Title not found"),
-                    "price": item.get("extracted_price", "Price not found"),
-                    "link": rich_data.get("direct_link", "Link not found"),
-                    "images": item.get("thumbnails", []),
-                    "source": item.get("source", "Source not found"),
-                    "description": rich_data.get("description", "Description not found"),
+                    "title": rich_product_info.product.title,
+                    "price": rich_product_info.seller.base_price,
+                    "link": rich_product_info.seller.direct_link,
+                    "images": rich_product_info.product.images,
+                    "source": rich_product_info.seller.seller_name,
+                    "description": rich_product_info.product.description,
                     "type": type
                 }
 
