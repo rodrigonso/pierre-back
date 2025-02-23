@@ -251,20 +251,20 @@ def search_single_item(query: str, type: str) -> dict:
 
             for item in items:  # Iterate over the first 5 items
 
-                extra_url = item.get("serpapi_product_api")
-                extra_response = requests.get(extra_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
-                extra_parsed = extra_response.json()
-                extra_data = extra_parsed.get("product_results", {})
+                rich_url = item.get("serpapi_product_api")
+                rich_response = requests.get(rich_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
+                rich_response_parsed = rich_response.json()
+                rich_data = rich_response_parsed.get("product_results", {})
 
                 result = {
                     "id": item.get("product_id", "Product id not found"),
                     "query": query,
                     "title": item.get("title", "Title not found"),
                     "price": item.get("extracted_price", "Price not found"),
-                    "link": item.get("product_link", "Link not found"),
+                    "link": rich_data.get("direct_link", "Link not found"),
                     "images": item.get("thumbnails", []),
                     "source": item.get("source", "Source not found"),
-                    "description": extra_data.get("description", "Description not found"),
+                    "description": rich_data.get("description", "Description not found"),
                     "type": type
                 }
 
