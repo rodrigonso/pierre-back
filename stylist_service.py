@@ -269,7 +269,7 @@ def search_single_item(query: str, type: str) -> dict:
             "engine": "google_shopping",
             "q": query,
             "api_key": os.getenv("SERPAPI_API_KEY"),
-            "num": 15,
+            "num": 5,
             "hl": "en",
             "gl": "us",
             "location": "United States",
@@ -283,7 +283,7 @@ def search_single_item(query: str, type: str) -> dict:
         if shopping_results:
 
             final_results = {"search_query": query, "search_results": []}
-            items = shopping_results[:15]  # Get the first 5 items
+            items = shopping_results[:5]  # Get the first 5 items
 
             for item in items:  # Iterate over the first 5 items
 
