@@ -7,7 +7,6 @@ import uvicorn
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
-from test import run_test_service
 from supabase import create_client, Client
 from pydantic import BaseModel
 
@@ -63,33 +62,6 @@ async def get_stylist(request: StylistRequest):
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/test")
-async def get_stylist_test(request: Request):
-    try:
-        with open('test_response.json', 'r') as f:
-            test_result = f.read()
-            return test_result
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-class DevRequest(BaseModel):
-    user_gender: str
-    user_preferred_brands: list
-    user_prompt: str
-
-@app.post("/dev")
-async def test(request: DevRequest):
-    try:
-        test = await run_test_service(request.user_prompt, request.user_gender, request.user_preferred_brands)
-        print(test)
-        return test.model_dump_json()
-
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/health")
 async def health_check():

@@ -11,11 +11,17 @@ from langgraph.graph import Graph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
-from models import ProductResponse, ProductInfo, SellerInfo
+from models import ProductResponse, ProductInfo, SellerInfo, Product
+from supabase import create_client
 
 load_dotenv()
 
 model = ChatOpenAI(model="gpt-4o", max_retries=1)
+
+# Initialize Supabase client
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def research_agent(user_data: dict):
     """
@@ -144,16 +150,35 @@ def stylist_agent(state: dict):
 
     return {**state, "wardrobe_plan": response}
 
+
+def add_products_to_db(products: dict):
+    """
+    Add product to the Supabase "products" table.
+    """
+    for product in products:
+        try:
+            supabase.table("products").insert({
+                "id": product.id,
+                "query": product.query,
+                "title": product.title,
+                "price": product.price,
+                "link": product.link,
+                "images": product.images,
+                "source": product.source,
+                "description": product.description,
+                "type": product.type
+            }).execute()
+            print(f"[shopping_agent] Added product to Supabase: {product['title']}")
+        except Exception as e:
+            print(f"[shopping_agent] Failed to add product to Supabase: {e}")
+
 def shopping_agent(state: dict):
     """
     Creates a shopping list based on the user's prompts and the stylist's outfits.
-    Performs searches in parallel.
+    Performs searches in parallel and stores results in the Supabase "products" table.
     """
     print("[shopping_agent] starting...")
 
-    # Extract search queries from stylist_outfits
-    user_prompt = state["user_prompt"]
-    user_gender = state["user_gender"]
     wardrobe_plan = state["wardrobe_plan"]
 
     parsed = json.loads(wardrobe_plan)
@@ -164,16 +189,15 @@ def shopping_agent(state: dict):
     # Perform parallel searches using ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=100) as executor:
         future_to_query = {
-            executor.submit(search_single_item, query, item_type): (query, item_type) 
-            for query, item_type in search_queries
-        }   
+            executor.submit(search_single_item, query, item_type): (query, item_type) for query, item_type in search_queries
+        }
 
         formatted_results = []
         for future in as_completed(future_to_query):
             result = future.result()
             if result:
                 formatted_results.append(result)
-
+                executor.submit(add_products_to_db, result)
 
     print("[shopping_agent] done!")
 
@@ -282,7 +306,7 @@ def search_single_item(query: str, type: str) -> dict:
 
         if shopping_results:
 
-            final_results = {"search_query": query, "search_results": []}
+            final_products = {"search_query": query, "search_results": []}
             items = shopping_results[:5]  # Get the first 5 items
 
             for item in items:  # Iterate over the first 5 items
@@ -291,22 +315,22 @@ def search_single_item(query: str, type: str) -> dict:
                 rich_response = requests.get(rich_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
                 rich_response_parsed = rich_response.json()
 
-                rich_product_info = extract_product_data(rich_response_parsed)
+                rich_product_info: ProductInfo = extract_product_data(rich_response_parsed)
 
-                result = {
-                    "id": rich_product_info.product.product_id,
-                    "query": query,
-                    "title": rich_product_info.product.title,
-                    "price": rich_product_info.seller.base_price,
-                    "link": rich_product_info.seller.direct_link,
-                    "images": rich_product_info.product.images,
-                    "source": rich_product_info.seller.seller_name,
-                    "description": rich_product_info.product.description,
-                    "type": type
-                }
+                product = Product(
+                    id=rich_product_info.product.product_id,
+                    query=query,
+                    title=rich_product_info.product.title,
+                    price=rich_product_info.seller.base_price,
+                    link=rich_product_info.seller.direct_link,
+                    images=rich_product_info.product.images,
+                    source=rich_product_info.seller.seller_name,
+                    description=rich_product_info.product.description,
+                    type=type
+                )
 
-                final_results["search_results"].append(result)
-            return final_results
+                final_products["search_results"].append(product)
+            return final_products
 
     except Exception as e:
         print(f"Error occurred while searching for item: {query}. Error: {e}")

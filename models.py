@@ -22,3 +22,14 @@ class ProductInfo(BaseModel):
 class ProductResponse(BaseModel):
     product: ProductInfo
     seller: SellerInfo
+
+class Product(BaseModel):
+    id: str
+    query: Optional[str] = None
+    title: Optional[str] = None
+    price: Optional[str] = None
+    link: Optional[str] = None
+    images: List[str] = []
+    source: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
