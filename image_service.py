@@ -37,19 +37,19 @@ def generate(product_list: list[Product]) -> str:
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
     files = []
+    local_files = []  # Keep track of local files to delete later
     for product in product_list:
         image_link = product['images'][0]
         
-        # Use the product title as the file name
-        file_name = f"{product['title'].replace(' ', '_')}.jpg"
+        # Use the product title as the file name to help the LLM.
+        file_name = f"{product['title'].replace(' ', '_').lower()}.jpg"
         
-        # Download the image from the URL
         response = requests.get(image_link)
         if response.status_code == 200:
-            # Save the image using the helper function
+
             save_binary_file(file_name, response.content)
-            
-            # Upload the downloaded file
+            local_files.append(file_name)
+
             uploaded_file = client.files.upload(file=file_name)
             files.append(uploaded_file)
         else:
@@ -93,10 +93,18 @@ def generate(product_list: list[Product]) -> str:
     generated_image_url = None
     for candidate in response.candidates:
         if candidate.content.parts[0].inline_data:
+
             file_name = f"public/{uuid.uuid4().hex}.jpg"
             binary_data = candidate.content.parts[0].inline_data.data
-
             generated_image_url = upload_to_db(file_name, binary_data)
+
             break
-    
+
+    # Clean up local files
+    for local_file in local_files:
+        try:
+            os.remove(local_file)
+        except OSError as e:
+            print(f"Error deleting file {local_file}: {e}")
+
     return generated_image_url
