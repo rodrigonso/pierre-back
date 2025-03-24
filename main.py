@@ -7,6 +7,7 @@ import uvicorn
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
+from image_service import generate
 from supabase import create_client, Client
 from pydantic import BaseModel
 
@@ -62,6 +63,20 @@ async def get_stylist(request: StylistRequest):
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
+class GenerateImage(BaseModel):
+    products: list
+
+@app.post("/generate_image")
+async def generate_image(request: Request):
+    try:
+        data = await request.json()
+        generated_image_url: str = generate(data)
+        return {"status": "success", "url": generated_image_url}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():
