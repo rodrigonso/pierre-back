@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import json
+import uuid
 
 from langgraph.graph import START, END
 from langchain_community.tools import DuckDuckGoSearchResults
@@ -11,7 +12,7 @@ from langgraph.graph import Graph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
-from models import ProductResponse, ProductInfo, SellerInfo, Product
+from models import ProductResponse, ProductInfo, SellerInfo, Product, Outfit, StylistServiceResult
 from supabase import create_client
 
 load_dotenv()
@@ -172,7 +173,7 @@ def add_products_to_db(products: dict):
         except Exception as e:
             print(f"[shopping_agent] Failed to add product to Supabase: {e}")
 
-def shopping_agent(state: dict):
+def shopping_agent(state: dict) -> dict:
     """
     Creates a shopping list based on the user's prompts and the stylist's outfits.
     Performs searches in parallel and stores results in the Supabase "products" table.
@@ -197,7 +198,7 @@ def shopping_agent(state: dict):
             result = future.result()
             if result:
                 formatted_results.append(result)
-                executor.submit(add_products_to_db, result)
+                # executor.submit(add_products_to_db, result)
 
     print("[shopping_agent] done!")
 
@@ -238,6 +239,7 @@ def formatter_agent(state: dict):
             item_results = shopping_map.get(search_query, [])
 
             formatted_item = {
+                "id": item.get("id", uuid.uuid4().hex),
                 "type": item["type"],
                 "search_query": search_query,
                 "products": item_results if item_results else []
@@ -260,6 +262,8 @@ def extract_product_data(response_json) -> ProductResponse:
     online_sellers = seller_data.get('online_sellers', [])
     seller_info = SellerInfo()
     if online_sellers:
+
+        # Grab the first seller - we are assuming 1st seller is the best
         first_seller = online_sellers[0]
         seller_info = SellerInfo(
             seller_name=first_seller.get('name'),
@@ -337,7 +341,7 @@ def search_single_item(query: str, type: str) -> dict:
     return None
 
 
-def run_stylist_service(user_data: dict):
+def run_stylist_service(user_data: dict) -> dict:
     workflow = Graph()
 
     workflow.add_node("research_agent", research_agent)
@@ -358,4 +362,4 @@ def run_stylist_service(user_data: dict):
     print("[stylist_service] start.")
     result = chain.invoke(user_data)
     print("[stylist_service] exit.")
-    return json.dumps(result)
+    return result

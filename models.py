@@ -33,3 +33,13 @@ class Product(BaseModel):
     source: Optional[str] = None
     description: Optional[str] = None
     type: Optional[str] = None
+
+class Outfit(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    items: List[Product]
+
+class StylistServiceResult(BaseModel):
+    user_prompt: str
+    outfits: List[Outfit]

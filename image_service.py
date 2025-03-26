@@ -38,11 +38,16 @@ def generate(product_list: list[Product]) -> str:
 
     files = []
     local_files = []  # Keep track of local files to delete later
+
     for product in product_list:
-        image_link = product['images'][0]
+        print(f"Generating image for product: {product}")
+        if not product.images:
+            continue
+        image_link = product.images[0]
         
         # Use the product title as the file name to help the LLM.
-        file_name = f"{product['title'].replace(' ', '_').lower()}.jpg"
+        # file_name = f"{product.title.replace(' ', '_').lower()}.jpg"
+        file_name = f"{product.type}_{uuid.uuid4().hex}.jpg"
         
         response = requests.get(image_link)
         if response.status_code == 200:
@@ -66,23 +71,10 @@ def generate(product_list: list[Product]) -> str:
     )
 
     # Dynamically populate the parts key with the files list
-    user_parts = [
-        types.Part.from_uri(
-            file_uri=file.uri,
-            mime_type=file.mime_type,
-        )
-        for file in files
-    ]
+    user_parts = [types.Part.from_uri(file_uri=file.uri, mime_type=file.mime_type) for file in files]
+    user_parts.append(types.Part.from_text(text="""Generate an image of a caucasian female model on a neutral background wearing an outfit made of of ONLY the images provided:"""))
 
-    user_parts.append(
-        types.Part.from_text(
-            text="""A white female model on a neutral background wearing the following items:\n\n"""
-        )
-    )
-
-    contents = [
-        types.Content(role="user", parts=user_parts,)
-    ]
+    contents = [types.Content(role="user", parts=user_parts)]
 
     response: types.GenerateContentResponse = client.models.generate_content(
         model=model,
@@ -100,11 +92,11 @@ def generate(product_list: list[Product]) -> str:
 
             break
 
-    # Clean up local files
-    for local_file in local_files:
-        try:
-            os.remove(local_file)
-        except OSError as e:
-            print(f"Error deleting file {local_file}: {e}")
+    # # Clean up local files
+    # for local_file in local_files:
+    #     try:
+    #         os.remove(local_file)
+    #     except OSError as e:
+    #         print(f"Error deleting file {local_file}: {e}")
 
     return generated_image_url

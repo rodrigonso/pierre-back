@@ -10,6 +10,7 @@ from stylist_service import run_stylist_service
 from image_service import generate
 from supabase import create_client, Client
 from pydantic import BaseModel
+from models import StylistServiceResult
 
 # Load environment variables from .env file
 load_dotenv()
@@ -58,7 +59,19 @@ class StylistRequest(BaseModel):
 @app.post("/stylist")
 async def get_stylist(request: StylistRequest):
     try:
-        stylist_result = run_stylist_service(request.model_dump())
+        stylist_result: dict = run_stylist_service(request.model_dump())
+        # print("\n\n\n")
+
+        # for outfit in stylist_result["outfits"]:
+        #     print(outfit["name"])
+        #     print("\n_________________________________________________\n")
+
+        #     first_products = []
+        #     for item in outfit["items"]:
+        #         first_products.append(item["products"][0])
+
+        #     outfit["image_url"] = generate(first_products)
+
         return stylist_result
     except Exception as e:
         print(e)
