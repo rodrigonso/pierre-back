@@ -129,7 +129,7 @@ def stylist_agent(state: dict):
                    f'      "description": "<brief description of the outfit>",\n'
                    f'      "items": [\n'
                    f'        {{\n'
-                   f'          "type": "<item type (e.g., top, bottom, shoes)>",\n'
+                   f'          "type": "<item type (only possible values: tops, bottoms, shoes, accessories)>",\n'
                    f'          "search_query": "<specific search query for this item>"\n'
                    f'        }}\n'
                    f'      ]\n'
