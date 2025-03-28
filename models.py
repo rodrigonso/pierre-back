@@ -39,7 +39,3 @@ class Outfit(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     items: List[Product]
-
-class StylistServiceResult(BaseModel):
-    user_prompt: str
-    outfits: List[Outfit]

@@ -12,7 +12,7 @@ from langgraph.graph import Graph
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
-from models import ProductResponse, ProductInfo, SellerInfo, Product, Outfit, StylistServiceResult
+from models import ProductResponse, ProductInfo, SellerInfo, Product, Outfit
 from supabase import create_client
 
 load_dotenv()
@@ -169,7 +169,7 @@ def add_products_to_db(products: dict):
                 "description": product.description,
                 "type": product.type
             }).execute()
-            print(f"[shopping_agent] Added product to Supabase: {product['title']}")
+            print(f"[shopping_agent] Added product to Supabase: {product.title}")
         except Exception as e:
             print(f"[shopping_agent] Failed to add product to Supabase: {e}")
 
@@ -195,10 +195,9 @@ def shopping_agent(state: dict) -> dict:
 
         formatted_results = []
         for future in as_completed(future_to_query):
-            result = future.result()
-            if result:
-                formatted_results.append(result)
-                # executor.submit(add_products_to_db, result)
+            product_result = future.result()
+            if product_result:
+                formatted_results.append(product_result)
 
     print("[shopping_agent] done!")
 
@@ -360,6 +359,6 @@ def run_stylist_service(user_data: dict) -> dict:
     chain = workflow.compile()
 
     print("[stylist_service] start.")
-    result = chain.invoke(user_data)
+    outfits = chain.invoke(user_data)
     print("[stylist_service] exit.")
-    return result
+    return outfits

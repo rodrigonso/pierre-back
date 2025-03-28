@@ -10,7 +10,9 @@ from stylist_service import run_stylist_service
 from image_service import generate
 from supabase import create_client, Client
 from pydantic import BaseModel
-from models import StylistServiceResult
+from models import Product
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv()
@@ -50,6 +52,8 @@ app.add_middleware(
 
 #     return await call_next(request)\
 
+executor = ThreadPoolExecutor()
+
 class StylistRequest(BaseModel):
     user_gender: str
     user_prompt: str
@@ -59,23 +63,46 @@ class StylistRequest(BaseModel):
 @app.post("/stylist")
 async def get_stylist(request: StylistRequest):
     try:
-        stylist_result: dict = run_stylist_service(request.model_dump())
-        # print("\n\n\n")
+        outfits: dict = run_stylist_service(request.model_dump())
 
-        # for outfit in stylist_result["outfits"]:
-        #     print(outfit["name"])
-        #     print("\n_________________________________________________\n")
+        # Run the database operations in a separate thread
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(executor, process_outfits, outfits)
 
-        #     first_products = []
-        #     for item in outfit["items"]:
-        #         first_products.append(item["products"][0])
-
-        #     outfit["image_url"] = generate(first_products)
-
-        return stylist_result
+        return outfits
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+
+def process_outfits(outfits: dict):
+    """
+    Process outfits and insert data into the database in a separate thread.
+    """
+    for outfit in outfits.get("outfits", []):
+
+        outfit_response = supabase.table("outfits").insert({
+            "name": outfit.get("name"),
+            "description": outfit.get("description")
+        }).execute()
+
+        # Get the inserted outfit's ID
+        outfit_id = outfit_response.data[0]["id"]
+
+        for item in outfit.get("items", []):
+            for product in item.get("products", []):
+                print("Inserting product: ", product.title)
+                product_response = supabase.table("products").insert({
+                    "id": product.id,
+                    "type": product.type,
+                    "query": product.query,
+                    "link": product.link,
+                    "title": product.title,
+                    "price": product.price,
+                    "images": product.images,
+                    "source": product.source,
+                    "description": product.description,
+                    "outfit_id": outfit_id  # Foreign key relationship
+                }).execute()
 
 class GenerateImage(BaseModel):
     products: list
