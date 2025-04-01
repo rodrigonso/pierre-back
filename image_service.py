@@ -33,21 +33,21 @@ def upload_to_db(file_name: str, data: bytes) -> str:
     public_url = supabase.storage.from_('generated-images').get_public_url(file_name)
     return public_url
 
-def generate(product_list: list[Product]) -> str:
+def generate_outfit_image(product_list: list[Product]) -> str:
+    # print(product_list)
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
     files = []
     local_files = []  # Keep track of local files to delete later
 
     for product in product_list:
-        print(f"Generating image for product: {product}")
+        print(f"Generating image for product: {product.title}")
         if not product.images:
             continue
         image_link = product.images[0]
         
         # Use the product title as the file name to help the LLM.
-        # file_name = f"{product.title.replace(' ', '_').lower()}.jpg"
-        file_name = f"{product.type}_{uuid.uuid4().hex}.jpg"
+        file_name = f"{''.join(e if e.isalnum() or e.isspace() else '' for e in product.title).replace(' ', '_')}.jpg"
         
         response = requests.get(image_link)
         if response.status_code == 200:
@@ -72,7 +72,7 @@ def generate(product_list: list[Product]) -> str:
 
     # Dynamically populate the parts key with the files list
     user_parts = [types.Part.from_uri(file_uri=file.uri, mime_type=file.mime_type) for file in files]
-    user_parts.append(types.Part.from_text(text="""Generate an image of a caucasian female model on a neutral background wearing an outfit made of of ONLY the images provided:"""))
+    user_parts.append(types.Part.from_text(text="""Generate an image of a female model on a neutral background wearing an outfit based on the images provided. Each image represents an item of the outfit, use the name of the image file to your advantage.:"""))
 
     contents = [types.Content(role="user", parts=user_parts)]
 
@@ -92,11 +92,11 @@ def generate(product_list: list[Product]) -> str:
 
             break
 
-    # # Clean up local files
-    # for local_file in local_files:
-    #     try:
-    #         os.remove(local_file)
-    #     except OSError as e:
-    #         print(f"Error deleting file {local_file}: {e}")
+    # Clean up local files
+    for local_file in local_files:
+        try:
+            os.remove(local_file)
+        except OSError as e:
+            print(f"Error deleting file {local_file}: {e}")
 
     return generated_image_url

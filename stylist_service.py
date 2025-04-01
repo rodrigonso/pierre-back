@@ -226,9 +226,11 @@ def formatter_agent(state: dict):
 
     # Map shopping results to each outfit
     for outfit in wardrobe_plan["outfits"]:
+
         formatted_outfit = {
             "name": outfit["name"],
             "description": outfit["description"],
+            "query": user_prompt,
             "items": []
         }
 
@@ -237,13 +239,15 @@ def formatter_agent(state: dict):
             search_query = item["search_query"]
             item_results = shopping_map.get(search_query, [])
 
-            formatted_item = {
-                "id": item.get("id", uuid.uuid4().hex),
-                "type": item["type"],
-                "search_query": search_query,
-                "products": item_results if item_results else []
-            }
-            formatted_outfit["items"].append(formatted_item)
+            # formatted_item = {
+            #     "id": item.get("id", uuid.uuid4().hex),
+            #     "type": item["type"],
+            #     "search_query": search_query,
+            #     "products": item_results if item_results else []
+            # }
+
+            # formatted_outfit["items"].append(formatted_item)
+            formatted_outfit["items"].extend(item_results)
 
         formatted_output["outfits"].append(formatted_outfit)
 
@@ -310,7 +314,7 @@ def search_single_item(query: str, type: str) -> dict:
         if shopping_results:
 
             final_products = {"search_query": query, "search_results": []}
-            items = shopping_results[:5]  # Get the first 5 items
+            items = [shopping_results[0]]  # Get the first item and keep it as an array
 
             for item in items:  # Iterate over the first 5 items
 
