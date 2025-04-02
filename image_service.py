@@ -1,4 +1,3 @@
-import base64
 import os
 import requests
 from google import genai
@@ -34,14 +33,13 @@ def upload_to_db(file_name: str, data: bytes) -> str:
     return public_url
 
 def generate_outfit_image(product_list: list[Product]) -> str:
-    # print(product_list)
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
     files = []
     local_files = []  # Keep track of local files to delete later
 
     for product in product_list:
-        print(f"Generating image for product: {product.title}")
+        print(f"Uploading temp image for product: {product.title}")
         if not product.images:
             continue
         image_link = product.images[0]
@@ -89,6 +87,7 @@ def generate_outfit_image(product_list: list[Product]) -> str:
             file_name = f"public/{uuid.uuid4().hex}.jpg"
             binary_data = candidate.content.parts[0].inline_data.data
             generated_image_url = upload_to_db(file_name, binary_data)
+            print(f"Generated image URL: {generated_image_url}")
 
             break
 

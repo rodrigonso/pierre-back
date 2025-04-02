@@ -238,15 +238,6 @@ def formatter_agent(state: dict):
         for item in outfit["items"]:
             search_query = item["search_query"]
             item_results = shopping_map.get(search_query, [])
-
-            # formatted_item = {
-            #     "id": item.get("id", uuid.uuid4().hex),
-            #     "type": item["type"],
-            #     "search_query": search_query,
-            #     "products": item_results if item_results else []
-            # }
-
-            # formatted_outfit["items"].append(formatted_item)
             formatted_outfit["items"].extend(item_results)
 
         formatted_output["outfits"].append(formatted_outfit)

@@ -16,7 +16,6 @@ charset-normalizer==3.4.1
 click==8.1.8
 cohere==5.13.12
 colorama==0.4.6
-Crawl4AI==0.4.248
 cryptography==44.0.0
 cssselect==1.2.0
 dataclasses-json==0.6.7
@@ -93,8 +92,6 @@ pyasn1==0.6.1
 pyasn1_modules==0.4.1
 pycparser==2.22
 pydantic==2.10.6
-pydantic-ai==0.0.22
-pydantic-ai-slim==0.0.22
 pydantic-graph==0.0.22
 pydantic-settings==2.7.1
 pydantic_core==2.27.2
