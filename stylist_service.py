@@ -17,7 +17,8 @@ from supabase import create_client
 
 load_dotenv()
 
-model = ChatOpenAI(model="gpt-4o", max_retries=1)
+# model = ChatOpenAI(model="gpt-4o", max_retries=1)
+model = ChatOpenAI(model="o3-mini", max_retries=1)
 
 # Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -112,15 +113,17 @@ def stylist_agent(state: dict):
 
     user_prompt = state["user_prompt"]
     user_gender = state["user_gender"]
-    curated_articles = state["curated_articles"]
-    research_prompt = state["research_prompt"]
+    # curated_articles = state["curated_articles"]
+    # research_prompt = state["research_prompt"]
     num_of_outfits = state["num_of_outfits"]
 
     prompt = [{
         "role": "system",
-        "content": f'As a personal fashion stylist, your sole purpose is to create a a list of outfits based on the user\'s style preferences, gender, budget, and any other user-specific information.\n'
-                   f'You MUST choose from top/premium brands that are available online and craft your list based on the information found in the curated style articles.\n'
-                   f'You need to create {num_of_outfits} complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query for the best deals.\n'
+        "content": f'As a personal stylist, your goal is to create a list of outfits based on the user\'s prompt taking into consideration their style preferences, gender, budget, and any other user-specific information provided.\n'
+                   f'You MUST choose from top/premium brands that are available online and craft your outfit list.\n'
+                   f'You need to create {num_of_outfits} complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query.\n'
+                   f'Make sure to use cohesive colors and pieces that will work well together.\n'
+                   f'Take into consideration the occasion, season and style when creating the outfits.\n'
                    f'Please return your response in this exact JSON string format:\n'
                    f'{{\n'
                    f'  "outfits": [\n'
@@ -140,8 +143,9 @@ def stylist_agent(state: dict):
     }, {
         "role": "user",
         "content": f"User gender: {user_gender}\n."
-                   f"User prompt: {research_prompt}\n."
-                   f"Curated articles: {curated_articles}\n."
+                   f"User prompt: {user_prompt}\n."
+                   f"User preferred brands: {', '.join(state['user_preferred_brands'])}\n."
+                #    f"Curated articles: {curated_articles}\n."
     }]
 
     converted = convert_openai_messages(prompt)
@@ -338,15 +342,16 @@ def search_single_item(query: str, type: str) -> dict:
 def run_stylist_service(user_data: dict) -> dict:
     workflow = Graph()
 
-    workflow.add_node("research_agent", research_agent)
-    workflow.add_node("search_agent", search_agent)
+    # workflow.add_node("research_agent", research_agent)
+    # workflow.add_node("search_agent", search_agent)
     workflow.add_node("stylist_agent", stylist_agent)
     workflow.add_node("shopping_agent", shopping_agent)
     workflow.add_node("formatter_agent", formatter_agent)
 
-    workflow.add_edge(START, "research_agent")
-    workflow.add_edge("research_agent", "search_agent")
-    workflow.add_edge("search_agent", "stylist_agent")
+    # workflow.add_edge(START, "research_agent")
+    # workflow.add_edge("research_agent", "search_agent")
+    # workflow.add_edge("search_agent", "stylist_agent")
+    workflow.add_edge(START, "stylist_agent")
     workflow.add_edge("stylist_agent", "shopping_agent")
     workflow.add_edge("shopping_agent", "formatter_agent")
     workflow.add_edge("formatter_agent", END)
