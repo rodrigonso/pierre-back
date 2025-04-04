@@ -117,29 +117,38 @@ def stylist_agent(state: dict):
     # research_prompt = state["research_prompt"]
     num_of_outfits = state["num_of_outfits"]
 
+    content = f"""
+    As a personal stylist, I want you to create a list of outfits based on the user\'s prompt taking into consideration their style preferences, gender, budget, and any other user-specific information provided.
+
+    Each outfit should also take into consideration the occasion, season and style the user is requesting when creating the outfits. Make sure you choose cohesive colors and pieces that will work well together.
+
+    You MUST choose from top/premium brands that are available online and/or pick the user-specified preferred brands to craft your outfit list.
+
+    Each outfit should be unique and different from the others but follow the same style/theme.
+
+    You need to create {num_of_outfits} complete outfits. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query.
+
+    Please return your response in this exact JSON string format:
+    {{
+      "outfits": [
+        {{
+          "name": "<outfit name>",
+          "description": "<brief description of the outfit>",
+          "items": [
+            {{
+              "type": "<item type (only possible values: tops, bottoms, shoes, accessories)>",
+              "search_query": "<specific search query for this item>"
+            }}
+          ]
+        }}
+      ]
+    }}
+    Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers.
+    """
+
     prompt = [{
         "role": "system",
-        "content": f'As a personal stylist, your goal is to create a list of outfits based on the user\'s prompt taking into consideration their style preferences, gender, budget, and any other user-specific information provided.\n'
-                   f'You MUST choose from top/premium brands that are available online and craft your outfit list.\n'
-                   f'You need to create {num_of_outfits} complete outfit plans. Each outfit should include a list of items that the \'shopping_agent\' will use to create a search query.\n'
-                   f'Make sure to use cohesive colors and pieces that will work well together.\n'
-                   f'Take into consideration the occasion, season and style when creating the outfits.\n'
-                   f'Please return your response in this exact JSON string format:\n'
-                   f'{{\n'
-                   f'  "outfits": [\n'
-                   f'    {{\n'
-                   f'      "name": "<outfit name>",\n'
-                   f'      "description": "<brief description of the outfit>",\n'
-                   f'      "items": [\n'
-                   f'        {{\n'
-                   f'          "type": "<item type (only possible values: tops, bottoms, shoes, accessories)>",\n'
-                   f'          "search_query": "<specific search query for this item>"\n'
-                   f'        }}\n'
-                   f'      ]\n'
-                   f'    }}\n'
-                   f'  ]\n'
-                   f'}}\n'
-                   f'Do not include any other text or formatting in your response. It should only be the JSON string response. Do not wrap the json codes in JSON markers. \n'
+        "content": content
     }, {
         "role": "user",
         "content": f"User gender: {user_gender}\n."
