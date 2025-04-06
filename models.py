@@ -39,3 +39,17 @@ class Outfit(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     items: List[Product]
+
+# Google Lens API Models
+class ProductMatch(BaseModel):
+    position: int
+    title: str
+    link: str
+    source: str
+    source_icon: str
+    thumbnail: str
+    thumbnail_width: int
+    thumbnail_height: int
+    image: str
+    image_width: int
+    image_height: int

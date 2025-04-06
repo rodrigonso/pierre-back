@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
 from image_service import generate_outfit_image
+from finder_service import run_finder_service
 from supabase import create_client, Client
 from pydantic import BaseModel
 from models import Product
@@ -164,7 +165,20 @@ async def generate_image(request: GenerateImageRequest):
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+    
+class FindOutfitRequest(BaseModel):
+    image_url: str
 
+@app.post("/find_outfit")
+async def find_outfit(request: FindOutfitRequest):
+    try:
+        # Call the finder service to get the product matches
+        results = await run_finder_service(request.image_url)
+
+        return {"status": "success", "matches": results}
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
