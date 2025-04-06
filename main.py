@@ -7,7 +7,7 @@ import uvicorn
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
-from image_service import generate_outfit_image
+from image_service import generate_outfit_image, extract_items_from_image
 from finder_service import run_finder_service
 from supabase import create_client, Client
 from pydantic import BaseModel
@@ -173,7 +173,13 @@ class FindOutfitRequest(BaseModel):
 async def find_outfit(request: FindOutfitRequest):
     try:
         # Call the finder service to get the product matches
-        results = await run_finder_service(request.image_url)
+        # results = await run_finder_service(request.image_url)
+        image_urls = extract_items_from_image(request.image_url)
+
+        results = []
+        for image_url in image_urls:
+            product_matches = await run_finder_service(image_url)
+            results.append({"image_url": image_url, "matches": product_matches[:5]})
 
         return {"status": "success", "matches": results}
     except Exception as e:
