@@ -7,6 +7,9 @@ from supabase import create_client, Client
 import uuid
 import base64
 import mimetypes
+from PIL import Image
+import io
+from transformers import pipeline
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
@@ -118,102 +121,43 @@ def generate_outfit_image(product_list: list[Product]) -> str:
 
     return generated_image_url
 
-def extract_items_from_image(image_url: str) -> dict:
-    files = []
+from PIL import Image
 
-    file_name = f"{uuid.uuid4().hex}.jpg"
+def object_detection(image_path: str) -> list[str]:
+    """
+    Perform object detection on the input image, crop the detected objects, and save them.
 
-    image_bytes = download_image_from_url(image_url)
+    :param image_data: The binary data of the input image.
+    :return: A list of file paths for the cropped images.
+    """
+    from PIL import ImageOps
 
-    save_binary_file(file_name, image_bytes)
-    uploaded_file = client.files.upload(file=file_name)
+    # Use a pipeline as a high-level helper
+    pipe = pipeline("object-detection", model="yainage90/fashion-object-detection")
+    output = pipe(image_path, threshold=0.75)
 
-    files.append(uploaded_file)
+    # Load the original image
+    original_image = Image.open(image_path).convert("RGBA")
+    cropped_image_paths = []
 
-    model = "gemini-2.0-flash-exp-image-generation"
-    contents = [
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_text(text="""Given an image of a person wearing various clothing items, extract each item from the image, and generate one image per clothing item individually. The output image should clearly highlight the individual item, removing any background distractions while maintaining the quality and accuracy of the clothes' appearance including colors, style. 
+    # Directory to save cropped images
+    output_dir = "public"
+    os.makedirs(output_dir, exist_ok=True)
 
-- Ensure that the extracted image showcases the clothing item clearly and accurately.
+    print(output)
 
-# Examples
-1. **Input Image**: [image of a person wearing a white top with jeans pants and high heels]
-   **Output**: 
-	Image 1: [Image focusing solely on the white top]
-	Image 2: [Image focusing solely on the jeans pants]
-	Image 3: [Image focusing solely on the high heels]
+    # Iterate over detected objects and crop the image
+    for idx, obj in enumerate(output):
+        box = obj['box']
+        label = obj['label']
+        xmin, ymin, xmax, ymax = int(box['xmin']), int(box['ymin']), int(box['xmax']), int(box['ymax'])
 
-# Notes
-- The background should be neutral or removed entirely to focus on the clothing."""),
-            ],
-        ),
-        types.Content(
-            role="model",
-            parts=[
-                types.Part.from_text(text="""Okay, I understand the task. You want me to take an image of a person wearing multiple clothing items, identify each distinct item, and then generate separate images where each image prominently features only one of those clothing items against a neutral or removed background.
+        # Crop the image
+        cropped_image = original_image.crop((xmin, ymin, xmax, ymax))
 
-Here's how I will approach this task conceptually:
+        # Save the cropped image
+        cropped_image_path = os.path.join(output_dir, f"{label}_{uuid.uuid4()}.png")
+        cropped_image.save(cropped_image_path)
+        cropped_image_paths.append(cropped_image_path)
 
-1.  **Object Detection and Segmentation:** The first step is to identify and segment each clothing item present in the input image. This involves using computer vision techniques to detect the boundaries and masks of different objects that are classified as clothing.
-
-2.  **Masking and Extraction:** Once the segmentation masks for each clothing item are available, I will use these masks to isolate the pixels corresponding to that specific item.
-
-3.  **Background Manipulation:** The areas outside the mask will be either filled with a neutral color (like white or light gray) or made transparent, effectively removing the background and any other clothing items or the person.
-
-4.  **Image Generation:** For each extracted and masked clothing item, a new image will be generated. This image will focus solely on the isolated item, preserving its original colors, textures, and overall style as accurately as possible.
-
-5.  **Output Presentation:** The final output will consist of a series of individual images, each clearly displaying one of the extracted clothing items.
-
-**To proceed with this task, please provide me with the image you want me to process.** Once you upload the image, I will do my best to extract each clothing item and generate the individual images as described."""),
-            ],
-        ),
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_uri(
-                    file_uri=files[0].uri,
-                    mime_type=files[0].mime_type,
-                ),
-            ],
-        )
-    ]
-    generate_content_config = types.GenerateContentConfig(
-        response_modalities=[
-            "image",
-            "text",
-        ],
-        response_mime_type="text/plain",
-    )
-
-    image_urls = []
-    for chunk in client.models.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=generate_content_config,
-    ):
-        if not chunk.candidates or not chunk.candidates[0].content or not chunk.candidates[0].content.parts:
-            continue
-        if chunk.candidates[0].content.parts[0].inline_data:
-            file_name = f"public/{uuid.uuid4().hex}"
-            inline_data = chunk.candidates[0].content.parts[0].inline_data
-            file_extension = mimetypes.guess_extension(inline_data.mime_type)
-            save_binary_file(
-                f"{file_name}{file_extension}", inline_data.data
-            )
-            print(
-                "File of mime type"
-                f" {inline_data.mime_type} saved"
-                f"to: {file_name}"
-            )
-            # Upload the generated image to Supabase storage
-            public_url = upload_to_db(f"{file_name}{file_extension}", inline_data.data)
-            print(f"Generated image URL: {public_url}")
-            image_urls.append(public_url)
-
-        else:
-            print(chunk.text)
-
-    return image_urls
+    return cropped_image_paths

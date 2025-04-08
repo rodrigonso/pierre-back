@@ -1,13 +1,18 @@
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
+import base64
+from io import BytesIO
+from PIL import Image
+import uuid
+
 
 import uvicorn
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
-from image_service import generate_outfit_image, extract_items_from_image
+from image_service import generate_outfit_image, upload_to_db, object_detection
 from finder_service import run_finder_service
 from supabase import create_client, Client
 from pydantic import BaseModel
@@ -167,24 +172,42 @@ async def generate_image(request: GenerateImageRequest):
         raise HTTPException(status_code=500, detail=str(e))
     
 class FindOutfitRequest(BaseModel):
-    image_url: str
+    image: str  # Base64 encoded image
 
 @app.post("/find_outfit")
 async def find_outfit(request: FindOutfitRequest):
     try:
-        # Call the finder service to get the product matches
-        # results = await run_finder_service(request.image_url)
-        image_urls = extract_items_from_image(request.image_url)
+        # Decode the base64 string
+        image_data = base64.b64decode(request.image)
+        file_path = f"decoded_image_{uuid.uuid4()}.jpg"
 
-        results = []
-        for image_url in image_urls:
+        with open(file_path, "wb") as f:
+            f.write(image_data)
+            # upload image to db
+            original_image_url = upload_to_db(f"public/original_{uuid.uuid4()}.jpg", image_data)
+
+        detected_objects_paths = object_detection(file_path)
+        print("Detected objects: ", detected_objects_paths)
+
+        outfit_result = []
+        for path in detected_objects_paths:
+            print("Detected object: ", path)
+            
+            # upload the file to db
+            image_url = ""
+            with open(path, "rb") as image_file:
+                image_bytes = image_file.read()
+                image_url = upload_to_db(f"public/cropped_{uuid.uuid4()}.png", image_bytes)
+
+            # Run the finder service
             product_matches = await run_finder_service(image_url)
-            results.append({"image_url": image_url, "matches": product_matches[:5]})
+            outfit_result.append({"original_image_url": original_image_url, "matches": product_matches})
 
-        return {"status": "success", "matches": results}
+        return {"status": "success", "outfit": outfit_result}
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
+    
 
 @app.get("/health")
 async def health_check():
