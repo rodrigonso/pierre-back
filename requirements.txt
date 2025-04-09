@@ -45,7 +45,7 @@ hpack==4.1.0
 httpcore==1.0.7
 httpx==0.28.1
 httpx-sse==0.4.0
-huggingface-hub==0.28.1
+huggingface-hub==0.30.2
 hyperframe==6.1.0
 idna==3.10
 importlib_metadata==8.6.1
@@ -65,9 +65,11 @@ MarkupSafe==3.0.2
 marshmallow==3.26.1
 mdurl==0.1.2
 mistralai==1.5.0
+mpmath==1.3.0
 msgpack==1.1.0
 multidict==6.1.0
 mypy-extensions==1.0.0
+networkx==3.3
 nltk==3.9.1
 numpy==1.26.4
 openai==1.61.1
@@ -92,6 +94,7 @@ pyOpenSSL==25.0.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 python-jose==3.3.0
+python-multipart==0.0.20
 PyYAML==6.0.2
 rank-bm25==0.2.2
 realtime==2.3.0
@@ -102,6 +105,7 @@ requests-toolbelt==1.0.0
 rich==13.9.4
 rpds-py==0.23.1
 rsa==4.9
+safetensors==0.5.3
 six==1.17.0
 sniffio==1.3.1
 snowballstemmer==2.2.0
@@ -112,11 +116,17 @@ storage3==0.11.3
 StrEnum==0.4.15
 supabase==2.13.0
 supafunc==0.9.3
+sympy==1.13.1
 tenacity==9.0.0
 tf-playwright-stealth==1.1.2
 tiktoken==0.8.0
+timm==1.0.15
 tokenizers==0.21.0
+torch==2.6.0+cu126
+torchaudio==2.6.0+cu126
+torchvision==0.21.0+cu126
 tqdm==4.67.1
+transformers==4.51.1
 types-requests==2.32.0.20241016
 typing-inspect==0.9.0
 typing_extensions==4.12.2
