@@ -90,6 +90,7 @@ async def run_finder_service(image_url) -> list[Product]:
 
     product_page_token = await find_item_by_image_url(image_url)
     product_matches: list[Product] = await get_product_matches(product_page_token)
+
     if not product_matches:
         return []
 

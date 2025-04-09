@@ -183,25 +183,30 @@ async def find_outfit(request: FindOutfitRequest):
 
         with open(file_path, "wb") as f:
             f.write(image_data)
-            # upload image to db
             original_image_url = upload_to_db(f"public/original_{uuid.uuid4()}.jpg", image_data)
 
         detected_objects_paths = object_detection(file_path)
         print("Detected objects: ", detected_objects_paths)
 
-        outfit_result = []
-        for path in detected_objects_paths:
-            print("Detected object: ", path)
-            
-            # upload the file to db
-            image_url = ""
-            with open(path, "rb") as image_file:
-                image_bytes = image_file.read()
-                image_url = upload_to_db(f"public/cropped_{uuid.uuid4()}.png", image_bytes)
+        async def process_path(path):
+            try:
+                # Upload the file to the database
+                with open(path, "rb") as image_file:
+                    image_bytes = image_file.read()
+                    image_url = upload_to_db(f"public/cropped_{uuid.uuid4()}.png", image_bytes)
 
-            # Run the finder service
-            product_matches = await run_finder_service(image_url)
-            outfit_result.append({"original_image_url": original_image_url, "matches": product_matches})
+                # Run the finder service
+                product_matches = await run_finder_service(image_url)
+                return {"original_image_url": original_image_url, "matches": product_matches}
+            except Exception as e:
+                print(f"Error processing path {path}: {e}")
+                return None
+
+        # Process all paths concurrently
+        outfit_result = await asyncio.gather(*(process_path(path) for path in detected_objects_paths))
+
+        # Filter out any None results in case of errors
+        outfit_result = [result for result in outfit_result if result is not None]
 
         return {"status": "success", "outfit": outfit_result}
     except Exception as e:

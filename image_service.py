@@ -134,7 +134,7 @@ def object_detection(image_path: str) -> list[str]:
 
     # Use a pipeline as a high-level helper
     pipe = pipeline("object-detection", model="yainage90/fashion-object-detection")
-    output = pipe(image_path, threshold=0.75)
+    output = pipe(image_path, threshold=0.70)
 
     # Load the original image
     original_image = Image.open(image_path).convert("RGBA")
