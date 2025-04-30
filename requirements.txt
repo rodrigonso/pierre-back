@@ -124,9 +124,9 @@ tf-playwright-stealth==1.1.2
 tiktoken==0.8.0
 timm==1.0.15
 tokenizers==0.21.0
-torch==2.6.0+cu126
-torchaudio==2.6.0+cu126
-torchvision==0.21.0+cu126
+torch==2.6.0
+torchaudio==2.6.0
+torchvision==0.21.0
 tqdm==4.67.1
 transformers==4.51.1
 types-requests==2.32.0.20241016
