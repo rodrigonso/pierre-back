@@ -145,6 +145,7 @@ def search_single_item(query: str, type: str) -> dict:
             items = [shopping_results[0]]  # Get the first item and keep it as an array
 
             for item in items:
+
                 rich_url = item.get("serpapi_product_api")
                 rich_response = requests.get(rich_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
                 rich_response_parsed = rich_response.json()
@@ -155,7 +156,7 @@ def search_single_item(query: str, type: str) -> dict:
                     id=rich_product_info.product.product_id,
                     query=query,
                     title=rich_product_info.product.title,
-                    price=rich_product_info.seller.base_price,
+                    price=item.get("extracted_price", 0),
                     link=rich_product_info.seller.direct_link,
                     images=rich_product_info.product.images,
                     source=rich_product_info.seller.seller_name,

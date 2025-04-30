@@ -37,8 +37,10 @@ async def find_item_by_image_url(image_url: str) -> str:
         results = search.get_dict()
 
         product_page_token = results.get("products_page_token", "")
+
         if not product_page_token:
             raise ValueError("Error: 'products_page_token' is empty in the results.")
+
     except Exception as e:
         print(f"Error during image search: {e}")
         product_page_token = ""
@@ -61,17 +63,19 @@ async def get_product_matches(product_page_token: str) -> list[Product]:
         results = search.get_dict()
 
         product_matches = results.get("visual_matches", [])
+
         if not product_matches:
-            raise ValueError("Error: 'shopping_results' is empty in the results.")
+            raise ValueError("Error: 'product_matches' is empty in the results.")
         
         result: list[Product] = []
+
         for match in product_matches[:10]:  # Limit to the first 10 matches
             product = {
                 "id": str(uuid.uuid4()),
                 "title": match.get("title", ""),
                 "link": match.get("link", ""),
                 "source": match.get("source", ""),
-                "price": match.get("price", {}).get("value", "0") if isinstance(match.get("price"), dict) else "0",
+                "price": match.get("price", {}).get("extracted_value", 0),
                 "images": [match.get("image", "")],
                 "description": match.get("description", ""),
                 "type": match.get("type", ""),
@@ -88,7 +92,7 @@ async def get_product_matches(product_page_token: str) -> list[Product]:
 async def run_finder_service(image_url) -> list[Product]:
     print("[finder_service] start.")
 
-    product_page_token = await find_item_by_image_url(image_url)
+    product_page_token: str = await find_item_by_image_url(image_url)
     product_matches: list[Product] = await get_product_matches(product_page_token)
 
     if not product_matches:

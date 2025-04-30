@@ -27,7 +27,7 @@ class Product(BaseModel):
     id: str
     query: Optional[str] = None
     title: Optional[str] = None
-    price: Optional[str] = None
+    price: Optional[float] = None
     link: Optional[str] = None
     images: List[str] = []
     source: Optional[str] = None

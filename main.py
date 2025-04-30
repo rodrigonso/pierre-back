@@ -12,7 +12,7 @@ import uvicorn
 from dotenv import load_dotenv
 import os
 from stylist_service import run_stylist_service
-from image_service import generate_outfit_image, upload_to_db, object_detection
+from image_service import generate_outfit_image, upload_image_to_db, detect_outfit_objects
 from finder_service import run_finder_service
 from supabase import create_client, Client
 from pydantic import BaseModel
@@ -65,36 +65,24 @@ class StylistRequest(BaseModel):
     user_prompt: str
     user_preferred_brands: list
     num_of_outfits: int
+    user_id: str
 
 @app.post("/stylist")
 async def get_stylist(request: StylistRequest):
     try:
         outfits: dict = run_stylist_service(request.model_dump())
 
-        # Run the database operations in a separate thread and wait for completion (no longer needed to be in seperate thread...)
-        outfits_with_ids_and_images = await process_outfits(outfits)
+        # Run the database operations in a separate thread and wait for completion
+        outfits_with_ids_and_images = await process_outfits(outfits, request.user_id)
 
         return outfits_with_ids_and_images
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
-    
-def generate_images_for_outfits(outfit: dict) -> str:
-    """
-    Generate images for each outfit in a separate thread.
-    """
-    try:
-        # Offload image generation to a separate thread
-        image_url = generate_outfit_image(outfit.get("items", []))
-        return image_url
 
-    except Exception as e:
-        print(f"Error generating image for outfit {outfit.get('id')}: {e}")
-        return None
-    
-def save_outfit_to_db(outfit: dict) -> dict:
+def save_outfit_to_db(outfit: dict, user_id: str = None) -> dict:
     """
-    Save outfit to the database.
+    Save outfit to the database and map it to a user if provided.
     """
     try:
         outfit_response = supabase.table("outfits").insert({
@@ -108,10 +96,22 @@ def save_outfit_to_db(outfit: dict) -> dict:
         outfit_id = outfit_response.data[0]["id"]
         outfit["id"] = outfit_id
 
+        # If user_id is provided, create a mapping in user_outfit_junction table
+        if user_id:
+            try:
+                supabase.table("user_outfit_junction").insert({
+                    "user_id": user_id,
+                    "outfit_id": outfit_id
+                }).execute()
+            except Exception as user_junction_error:
+                # Log the error and continue
+                print(f"Error inserting into user_outfit_junction for outfit {outfit_id}: {user_junction_error}")
+
         for product in outfit.get("items", []):
             print("Inserting product: ", product.title)
             try:
-                product_response = supabase.table("products").insert({
+
+                supabase.table("products").insert({
                     "id": product.id,
                     "type": product.type,
                     "query": product.query,
@@ -122,16 +122,19 @@ def save_outfit_to_db(outfit: dict) -> dict:
                     "source": product.source,
                     "description": product.description,
                 }).execute()
+
             except Exception as product_error:
                 # Log the error and continue if the product already exists
                 print(f"Error inserting product {product.id}: {product_error}")
 
             # Insert into product_outfit_junction table
             try:
+
                 supabase.table("product_outfit_junction").insert({
                     "outfit_id": outfit_id,
                     "product_id": product.id
                 }).execute()
+
             except Exception as junction_error:
                 # Log the error and continue
                 print(f"Error inserting into product_outfit_junction for product {product.id}: {junction_error}")
@@ -139,9 +142,10 @@ def save_outfit_to_db(outfit: dict) -> dict:
     except Exception as e:
         print(f"Error saving outfit to database: {e}")
         return None
+
     return outfit
 
-async def process_outfits(outfits: dict) -> dict:
+async def process_outfits(outfits: dict, user_id: str = None) -> dict:
     """
     Process outfits and insert data into the database in a separate thread.
     Updates the outfits dictionary with IDs from the database.
@@ -151,9 +155,9 @@ async def process_outfits(outfits: dict) -> dict:
     loop2 = asyncio.get_event_loop()
 
     for outfit in outfits.get("outfits", []):
-        outfit_image_url = await loop2.run_in_executor(executor, generate_images_for_outfits, outfit)
+        outfit_image_url = await loop2.run_in_executor(executor, generate_outfit_image, outfit.get("items", []))
         outfit["image_url"] = outfit_image_url
-        outfit_with_id = await loop.run_in_executor(executor, save_outfit_to_db, outfit)
+        outfit_with_id = await loop.run_in_executor(executor, lambda o: save_outfit_to_db(o, user_id), outfit)
 
         outfit = outfit_with_id
 
@@ -183,9 +187,9 @@ async def find_outfit(request: FindOutfitRequest):
 
         with open(file_path, "wb") as f:
             f.write(image_data)
-            original_image_url = upload_to_db(f"public/original_{uuid.uuid4()}.jpg", image_data)
+            original_image_url = upload_image_to_db(f"public/original_{uuid.uuid4()}.png", image_data)
 
-        detected_objects_paths = object_detection(file_path)
+        detected_objects_paths = detect_outfit_objects(file_path)
         print("Detected objects: ", detected_objects_paths)
 
         async def process_path(path):
@@ -193,7 +197,7 @@ async def find_outfit(request: FindOutfitRequest):
                 # Upload the file to the database
                 with open(path, "rb") as image_file:
                     image_bytes = image_file.read()
-                    image_url = upload_to_db(f"public/cropped_{uuid.uuid4()}.png", image_bytes)
+                    image_url = upload_image_to_db(f"public/cropped_{uuid.uuid4()}.png", image_bytes)
 
                 # Run the finder service
                 product_matches = await run_finder_service(image_url)
@@ -212,7 +216,7 @@ async def find_outfit(request: FindOutfitRequest):
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 
 @app.get("/health")
 async def health_check():

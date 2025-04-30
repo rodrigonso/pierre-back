@@ -5,10 +5,7 @@ from google.genai import types
 from models import Product
 from supabase import create_client, Client
 import uuid
-import base64
-import mimetypes
 from PIL import Image
-import io
 from transformers import pipeline
 
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -18,7 +15,7 @@ def save_binary_file(file_name, data):
     f.write(data)
     f.close()
 
-def upload_to_db(file_name: str, data: bytes) -> str:
+def upload_image_to_db(file_name: str, data: bytes) -> str:
     """
     Uploads a binary file to a Supabase storage bucket and returns the public URL.
 
@@ -77,10 +74,11 @@ def generate_outfit_image(product_list: list[Product]) -> str:
         print(f"Uploading temp image for product: {product.title}")
         if not product.images:
             continue
+
         image_link = product.images[0]
         
         # Use the product title as the file name to help the LLM.
-        file_name = f"{''.join(e if e.isalnum() or e.isspace() else '' for e in product.title).replace(' ', '_')}.jpg"
+        file_name = f"product_{product.id}_{uuid.uuid4().hex}.png"
         
         response = requests.get(image_link)
         if response.status_code == 200:
@@ -105,9 +103,9 @@ def generate_outfit_image(product_list: list[Product]) -> str:
     for candidate in response.candidates:
         if candidate.content.parts[0].inline_data:
 
-            file_name = f"public/{uuid.uuid4().hex}.jpg"
+            file_name = f"public/{uuid.uuid4().hex}.png"
             binary_data = candidate.content.parts[0].inline_data.data
-            generated_image_url = upload_to_db(file_name, binary_data)
+            generated_image_url = upload_image_to_db(file_name, binary_data)
             print(f"Generated image URL: {generated_image_url}")
 
             break
@@ -121,17 +119,13 @@ def generate_outfit_image(product_list: list[Product]) -> str:
 
     return generated_image_url
 
-from PIL import Image
-
-def object_detection(image_path: str) -> list[str]:
+def detect_outfit_objects(image_path: str) -> list[str]:
     """
     Perform object detection on the input image, crop the detected objects, and save them.
 
     :param image_data: The binary data of the input image.
     :return: A list of file paths for the cropped images.
     """
-    from PIL import ImageOps
-
     # Use a pipeline as a high-level helper
     pipe = pipeline("object-detection", model="yainage90/fashion-object-detection")
     output = pipe(image_path, threshold=0.70)
