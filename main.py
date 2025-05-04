@@ -177,6 +177,7 @@ async def generate_image(request: GenerateImageRequest):
     
 class FindOutfitRequest(BaseModel):
     image: str  # Base64 encoded image
+    user_id: str = None  # Optional user ID
 
 @app.post("/find_outfit")
 async def find_outfit(request: FindOutfitRequest):
@@ -192,6 +193,9 @@ async def find_outfit(request: FindOutfitRequest):
         detected_objects_paths = detect_outfit_objects(file_path)
         print("Detected objects: ", detected_objects_paths)
 
+        # Create a list to store all products from all detected objects
+        all_products = []
+
         async def process_path(path):
             try:
                 # Upload the file to the database
@@ -201,18 +205,36 @@ async def find_outfit(request: FindOutfitRequest):
 
                 # Run the finder service
                 product_matches = await run_finder_service(image_url)
-                return {"original_image_url": original_image_url, "matches": product_matches}
+                all_products.extend(product_matches)
+                return product_matches
             except Exception as e:
                 print(f"Error processing path {path}: {e}")
                 return None
 
         # Process all paths concurrently
-        outfit_result = await asyncio.gather(*(process_path(path) for path in detected_objects_paths))
+        await asyncio.gather(*(process_path(path) for path in detected_objects_paths))
 
-        # Filter out any None results in case of errors
-        outfit_result = [result for result in outfit_result if result is not None]
+        # Create an outfit in the same format as the stylist endpoint
+        outfit = {
+            "name": "Found Outfit",
+            "description": "Outfit generated from uploaded image",
+            "query": "Image search",
+            "items": all_products,
+            "image_url": original_image_url
+        }
 
-        return {"status": "success", "outfit": outfit_result}
+        # Create the outfits dict in the same format as returned by stylist
+        outfits = {
+            "outfits": [outfit]
+        }
+
+        # Process and save the outfit to the database
+        if request.user_id:
+            outfits_with_ids = await process_outfits(outfits, request.user_id)
+            return outfits_with_ids
+        else:
+            # If no user_id provided, just return the outfits without saving
+            return outfits
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
