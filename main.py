@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 from PIL import Image
 import uuid
+from products_service import ProductService, ProductsResult
 
 
 import uvicorn
@@ -16,9 +17,10 @@ from image_service import generate_outfit_image, upload_image_to_db, detect_outf
 from finder_service import run_finder_service
 from supabase import create_client, Client
 from pydantic import BaseModel
-from models import Product
+from models import Product, User
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+from stylist_agent import run_advanced_stylist_service
 
 # Load environment variables from .env file
 load_dotenv()
@@ -56,7 +58,7 @@ app.add_middleware(
 #     except Exception:
 #         return Response("Invalid user token", status_code=401)
 
-#     return await call_next(request)\
+#     return await call_next(request)
 
 executor = ThreadPoolExecutor()
 
@@ -70,12 +72,14 @@ class StylistRequest(BaseModel):
 @app.post("/stylist")
 async def get_stylist(request: StylistRequest):
     try:
-        outfits: dict = run_stylist_service(request.model_dump())
+        # outfits: dict = run_stylist_service(request.model_dump())
+        outfits = run_advanced_stylist_service(request.model_dump())
 
         # Run the database operations in a separate thread and wait for completion
-        outfits_with_ids_and_images = await process_outfits(outfits, request.user_id)
+        # outfits_with_ids_and_images = await process_outfits(outfits, request.user_id)
 
-        return outfits_with_ids_and_images
+        # return outfits_with_ids_and_images
+        return outfits
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -235,6 +239,30 @@ async def find_outfit(request: FindOutfitRequest):
         else:
             # If no user_id provided, just return the outfits without saving
             return outfits
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+class ProductsRequest(BaseModel):
+    user_id: str = None
+
+@app.get("/products")
+async def get_products(request: ProductsRequest):
+    try:
+        # get user from supabase profiles table:
+        user_record = supabase.table("profiles").select("*").eq("id", request.user_id).single().execute()
+        if not user_record.data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        print("User data: ", user_record.data)
+        user = User(**user_record.data)
+
+        service = ProductService(user)
+        products: ProductsResult = service.get_products()
+
+        return products.model_dump()
+
     except Exception as e:
         print(e)
         raise HTTPException(status_code=500, detail=str(e))

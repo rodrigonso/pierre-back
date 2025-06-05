@@ -33,6 +33,9 @@ class Product(BaseModel):
     source: Optional[str] = None
     description: Optional[str] = None
     type: Optional[str] = None
+    caption: Optional[str] = None
+    match_score: Optional[float] = None
+    match_explanation: Optional[str] = None
 
 class Outfit(BaseModel):
     name: Optional[str] = None
@@ -53,3 +56,10 @@ class ProductMatch(BaseModel):
     image: str
     image_width: int
     image_height: int
+
+
+class User(BaseModel):
+    id: str
+    name: Optional[str] = None
+    gender: Optional[str] = None
+    preferred_brands: List[str] = []
