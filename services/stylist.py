@@ -36,6 +36,7 @@ class OutfitItem:
     search_query: str
     color: str
     type: str
+    points: int = 0
     product: Optional[OutfitProduct] = None
 
     def to_str(self) -> str:
@@ -52,10 +53,11 @@ class OutfitConcept:
     name: str
     description: str
     items: list[OutfitItem]
+    points: int
 
     def to_str(self) -> str:
         items_str = ", ".join(item.to_str() for item in self.items)
-        return f"OutfitConcept(name={self.name}, description={self.description}, items=[{items_str}])"
+        return f"OutfitConcept(name={self.name}, description={self.description}, items=[{items_str}], points={self.points})"
 
 @dataclass
 class EvaluationFeedback:
@@ -218,6 +220,25 @@ class StylistService:
         ## Stylist Agent Instructions
         You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
 
+        When creating your outfit concepts, always apply the 7-point rule to ensure balanced and polished styling.
+        This rule states that a person should wear no more than 7 visible elements or accessories at one time to avoid looking overdone or cluttered.
+        Count these elements when styling:
+
+        ### Guidelines:
+
+        - Aim for 5-7 total elements for a polished look
+        - 3-4 elements work well for minimalist or casual styling
+        - When one element is very bold or statement-making it will count as 2 points
+        - Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
+        - Wedding rings and simple stud earrings are often considered "neutral" and may not count
+
+        ### When creating outfits:
+
+        - Always mentally count the styling elements in any outfit concept you create
+        - If an outfit exceeds 7 points, consider a different combination
+
+        Apply this rule consistently to create harmonious, intentional outfits that look effortlessly put-together rather than overdone.
+
         ## Known user information:
         - Positive styles: {wrapper.context.positive_styles}
         - Negative styles: {wrapper.context.negative_styles}
@@ -227,7 +248,8 @@ class StylistService:
         - Negative colors: {wrapper.context.negative_colors}
         - Gender: {wrapper.context.gender}
 
-        ## Important: Do NOT fill out the `products` field, it will be filled later by the shopper agent.
+        ## Important:
+        - Do NOT fill out the `products` field, it will be filled later by the shopper agent.
         """,
         output_type=OutfitConcept,
     )
@@ -315,17 +337,21 @@ class StylistService:
                     # Find the product that matches the evaluation result
                     evaluation_result: list[OutfitProductEvaluation] = shopping_eval_results[i].final_output
                     best_product_score = max(evaluation_result, key=lambda x: x.score, default=None)
+
                     matching_product = next(
                         (product for product in item_to_products[item] if product.title == best_product_score.product_title),
                         None
                     )
-                    # Create new item with the selected product
+
+                    # Create new item with the best matching product
                     updated_item = OutfitItem(
                         search_query=item.search_query,
                         color=item.color,
                         type=item.type,
-                        product=matching_product
+                        product=matching_product,
+                        points=item.points
                     )
+
                     updated_items.append(updated_item)
                     print(f"Chose product: {updated_item.product.title if updated_item.product else 'No products found'}")
                 
@@ -333,7 +359,8 @@ class StylistService:
                 outfit_concept = OutfitConcept(
                     name=outfit_concept.name,
                     description=outfit_concept.description,
-                    items=updated_items
+                    items=updated_items,
+                    points=sum(item.points for item in updated_items),
                 )
 
                 evaluation: RunResult = await Runner.run(self.evaluator_agent, outfit_concept.to_str(), context=self.context)
