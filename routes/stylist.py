@@ -8,10 +8,6 @@ from utils.models import User
 # Create router for stylist endpoints
 router = APIRouter()
 
-# In-memory storage for demo purposes (replace with database in production)
-stylists_db: List[dict] = []
-
-
 class CreateOutfitResponse(BaseModel):
     user_prompt: str
     outfits: List[OutfitConcept] = []

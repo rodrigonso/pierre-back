@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
 class SellerInfo(BaseModel):
     seller_name: Optional[str] = None
@@ -71,3 +72,14 @@ class User(BaseModel):
 
     positive_colors: List[str] = []
     negative_colors: List[str] = []
+
+class UserProfile(BaseModel):
+    user_id: str
+    email: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    provider: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    user_metadata: Optional[dict] = None
+    app_metadata: Optional[dict] = None

@@ -90,7 +90,7 @@ class StylistService:
             user_prompt=user_prompt
         )
 
-    def _fetch_product_details_sync(self, product):
+    def _fetch_product_details(self, product):
         """Synchronous version of fetch_product_details for use with threading"""
         print(f"Processing product: {product.get('title', 'Unknown')}")
 
@@ -113,7 +113,7 @@ class StylistService:
             images=[img.get("link") for img in product_details.get("media", []) if img.get("link")],
         )
 
-    async def _product_search(self, query: str) -> list[OutfitProduct]:
+    def _product_search(self, query: str) -> list[OutfitProduct]:
         """
         Search for a product using in Google Shopping given a query
         """
@@ -140,7 +140,7 @@ class StylistService:
         with ThreadPoolExecutor(max_workers=3) as executor:
             # Submit all tasks
             future_to_product = {
-                executor.submit(self._fetch_product_details_sync, product): product 
+                executor.submit(self._fetch_product_details, product): product 
                 for product in shopping_results[:3]
             }
             
@@ -154,6 +154,36 @@ class StylistService:
                     print(f'Product {product_data.get("title", "Unknown")} generated an exception: {exc}')
 
         return products
+    
+    def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
+        return ItemHelpers.text_message_outputs(new_input.new_items)
+
+    def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[OutfitProduct]]:
+        """
+        Fetch products for each item in the outfit concept.
+        This function is designed to be run in parallel for each item using multithreading.
+        Returns a dictionary mapping items to their corresponding products.
+        """
+
+        with ThreadPoolExecutor(max_workers=len(items)) as executor:
+            # Submit all tasks
+            future_to_item = {
+                executor.submit(self._product_search, f"{item.search_query} {item.color} {item.type} {self.context.gender}"): item
+                for item in items
+            }
+            
+            # Collect results as they complete
+            results = {}
+            for future in as_completed(future_to_item):
+                item = future_to_item[future]
+                try:
+                    products = future.result()
+                    results[item] = products
+                except Exception as exc:
+                    print(f'Item {item.to_str()} generated an exception: {exc}')
+                    results[item] = []  # Add empty list for failed searches
+
+        return results
 
     analyst_agent = Agent[StylistServiceContext](
         name="analyst",
@@ -238,40 +268,6 @@ class StylistService:
         """,
         output_type=EvaluationFeedback,
     )
-
-    def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
-        return ItemHelpers.text_message_outputs(new_input.new_items)
-
-    def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[OutfitProduct]]:
-        """
-        Fetch products for each item in the outfit concept.
-        This function is designed to be run in parallel for each item using multithreading.
-        Returns a dictionary mapping items to their corresponding products.
-        """
-
-        def search_item_products(item: OutfitItem) -> list[OutfitProduct]:
-            print(f"Searching products for item: {item.to_str()}")
-            return asyncio.run(self._product_search(f"{item.search_query} {item.color} {item.type} {self.context.gender}"))
-
-        with ThreadPoolExecutor(max_workers=len(items)) as executor:
-            # Submit all tasks
-            future_to_item = {
-                executor.submit(search_item_products, item): item 
-                for item in items
-            }
-            
-            # Collect results as they complete
-            results = {}
-            for future in as_completed(future_to_item):
-                item = future_to_item[future]
-                try:
-                    products = future.result()
-                    results[item] = products
-                except Exception as exc:
-                    print(f'Item {item.to_str()} generated an exception: {exc}')
-                    results[item] = []  # Add empty list for failed searches
-
-        return results
 
     async def run(self) -> None:
         with trace("Pierre"):

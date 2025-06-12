@@ -7,7 +7,7 @@ import os
 load_dotenv()
 
 # Import route modules
-from routes import stylist
+from routes import stylist, auth
 # Create FastAPI app
 app = FastAPI(
     title="Pierre API",
@@ -26,6 +26,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(stylist.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 
 @app.get("/")
 async def root():
