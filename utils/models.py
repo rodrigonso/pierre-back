@@ -62,4 +62,12 @@ class User(BaseModel):
     id: str
     name: Optional[str] = None
     gender: Optional[str] = None
-    preferred_brands: List[str] = []
+
+    positive_brands: List[str] = []
+    negative_brands: List[str] = []
+
+    positive_styles: List[str] = []
+    negative_styles: List[str] = []
+
+    positive_colors: List[str] = []
+    negative_colors: List[str] = []
