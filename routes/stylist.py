@@ -36,7 +36,6 @@ async def create_stylist(request: CreateOutfitRequest):
 
         service = StylistService(user=user, user_prompt=request.user_prompt)
         res: OutfitConcept = await service.run()
-        print("Stylist service response:", res)
 
         return CreateOutfitResponse(
             user_prompt=request.user_prompt,

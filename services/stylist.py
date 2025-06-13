@@ -4,49 +4,40 @@ from agents import Agent, Runner, trace, TResponseInputItem, ItemHelpers, functi
 from pydantic import BaseModel
 from typing import Literal, Optional
 from dataclasses import dataclass
-from serpapi import GoogleSearch
 import asyncio
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
-from utils.helpers import run_tasks_in_parallel, ParallelExecutionResult
+from utils.helpers import Product, search_products
 
 @dataclass
 class AnalystResult:
     positive_styles: list[str]
     negative_styles: list[str]
     positive_brands: list[str]
+    negative_brands: list[str]
     positive_colors: list[str]
+    negative_colors: list[str]
     occasion: Optional[str]
     season: Optional[str]
     budget: Optional[float]
     user_prompt: str
-
-@dataclass
-class OutfitProduct:
-    title: str
-    brand: str
-    description: str
-    price: float
-    link: str
-    images: list[str]
 
 @dataclass(frozen=True)
 class OutfitItem:
     search_query: str
     color: str
     type: str
+    reasoning: str
     points: int = 0
-    product: Optional[OutfitProduct] = None
+    product: Optional[Product] = None
 
     def to_str(self) -> str:
-        return f"OutfitItem(search_query={self.search_query}, color={self.color}, type={self.type})"
-    
-@dataclass
-class OutfitProductEvaluation:
-    score: float
-    product_title: str
-    reasoning: str
+        return f"""
+        ### Outfit Item Details
+        - Search query: {self.search_query}
+        - Color: {self.color}
+        - Type: {self.type}
+        """
 
 @dataclass
 class OutfitConcept:
@@ -56,8 +47,31 @@ class OutfitConcept:
     points: int
 
     def to_str(self) -> str:
-        items_str = ", ".join(item.to_str() for item in self.items)
-        return f"OutfitConcept(name={self.name}, description={self.description}, items=[{items_str}], points={self.points})"
+        """Convert the outfit concept to a markdown formatted string."""
+        items_md = "\n".join([
+            f"#### Item {i+1}: {item.type.title()}\n"
+            f"- **Search Query:** {item.search_query}\n"
+            f"- **Color:** {item.color}\n"
+            f"- **Points:** {item.points}\n"
+            f"- **Reasoning:** {item.reasoning}\n"
+            + (f"- **Product:** {item.product.title} by {item.product.brand} (${item.product.price})\n" if item.product else "- **Product:** Not selected\n")
+            for i, item in enumerate(self.items)
+        ])
+        
+        return f"""# {self.name}
+    ## Description
+    {self.description}
+
+    ## Total Style Points: {self.points}
+
+    ## Outfit Items
+    {items_md}"""
+    
+@dataclass
+class OutfitProductEvaluation:
+    score: float
+    product_title: str
+    reasoning: str
 
 @dataclass
 class EvaluationFeedback:
@@ -92,75 +106,10 @@ class StylistService:
             user_prompt=user_prompt
         )
 
-    def _fetch_product_details(self, product):
-        """Synchronous version of fetch_product_details for use with threading"""
-        print(f"Processing product: {product.get('title', 'Unknown')}")
-
-        product_info_url = product.get("serpapi_product_api")
-        if not product_info_url:
-            raise ValueError(f"No product info URL found for product: {product.get('title', 'Unknown')}")
-        
-        product_info = requests.get(product_info_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
-        product_info = product_info.json()
-
-        product_details = product_info.get("product_results", {})
-        product_seller = product_info.get("seller_results", {}).get("online_sellers", [{}])[0]
-
-        return OutfitProduct(
-            title=product_details.get("title", "No title"),
-            description=product_details.get("description", "No description"),
-            brand=product.get("source", "Unknown brand"),
-            price=float(product.get("extracted_price", 0.0)),
-            link=product_seller.get("direct_link", ""),
-            images=[img.get("link") for img in product_details.get("media", []) if img.get("link")],
-        )
-
-    def _product_search(self, query: str) -> list[OutfitProduct]:
-        """
-        Search for a product using in Google Shopping given a query
-        """
-
-        params = {
-            "engine": "google_shopping",
-            "q": query,
-            "api_key": os.getenv("SERPAPI_API_KEY"),
-            "num": 3,
-            "hl": "en",
-            "gl": "us",
-            "location": "United States",
-            "direct_link": True
-        }
-
-        search = GoogleSearch(params)
-        results = search.get_dict()
-        shopping_results = results.get("shopping_results", [])
-        if not shopping_results:
-            raise ValueError(f"No shopping results found for query: {query}")
-        
-        # Fetch product details using multithreading
-        products = []
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            # Submit all tasks
-            future_to_product = {
-                executor.submit(self._fetch_product_details, product): product 
-                for product in shopping_results[:3]
-            }
-            
-            # Collect results as they complete
-            for future in as_completed(future_to_product):
-                try:
-                    product = future.result()
-                    products.append(product)
-                except Exception as exc:
-                    product_data = future_to_product[future]
-                    print(f'Product {product_data.get("title", "Unknown")} generated an exception: {exc}')
-
-        return products
-    
     def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
         return ItemHelpers.text_message_outputs(new_input.new_items)
 
-    def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[OutfitProduct]]:
+    def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[Product]]:
         """
         Fetch products for each item in the outfit concept.
         This function is designed to be run in parallel for each item using multithreading.
@@ -170,7 +119,7 @@ class StylistService:
         with ThreadPoolExecutor(max_workers=len(items)) as executor:
             # Submit all tasks
             future_to_item = {
-                executor.submit(self._product_search, f"{item.search_query} {item.color} {item.type} {self.context.gender}"): item
+                executor.submit(search_products, f"{item.search_query} {item.color} {item.type} {self.context.gender}"): item
                 for item in items
             }
             
@@ -191,24 +140,21 @@ class StylistService:
         name="analyst",
         model="gpt-4o", 
         instructions=lambda wrapper, agent: f"""
-        ## Analyst Agent Instructions
-        You are an expert fashion analyst. Analyze the user's request, improve their prompt and extract outfit specific preferences that may be present in the user's prompt.
-        Pay special attention to:
-        - Style hints (minimalist, boho, streetwear, formal, casual, etc.)
-        - Brand hints (Zara, Levis, Reformation, etc.)
-        - Occasion (work, date, party, casual, etc.)
-        - Season/weather considerations
-        - Color preferences
-        - Budget hints
+## Analyst Agent Instructions
+You are an expert fashion analyst. Analyze the user's request, improve their prompt and extract outfit specific preferences that may be present in the user's prompt.
 
-        # Known user information:
-        - Positive styles: {wrapper.context.positive_styles}
-        - Negative styles: {wrapper.context.negative_styles}
-        - Positive brands: {wrapper.context.positive_brands}
-        - Negative brands: {wrapper.context.negative_brands}
-        - Positive colors: {wrapper.context.positive_colors}
-        - Negative colors: {wrapper.context.negative_colors}
-        - Gender: {wrapper.context.gender}
+### Guidelines:
+Pay special attention to:
+
+- Style hints (minimalist, boho, streetwear, formal, casual, etc.)
+- Brand hints (Zara, Levis, Reformation, etc.)
+- Occasion (work, date, party, casual, etc.)
+- Season/weather considerations
+- Color preferences
+- Budget hints
+
+### Known user information:
+- Gender: {wrapper.context.gender}
         """,
         output_type=AnalystResult,
     )
@@ -217,39 +163,40 @@ class StylistService:
         name="stylist",
         model="o4-mini",
         instructions=lambda wrapper, agent: f"""
-        ## Stylist Agent Instructions
-        You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
+## Stylist Agent Instructions
+You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
 
-        When creating your outfit concepts, always apply the 7-point rule to ensure balanced and polished styling.
-        This rule states that a person should wear no more than 7 visible elements or accessories at one time to avoid looking overdone or cluttered.
-        Count these elements when styling:
+When creating your outfit concepts, always apply the 7-point rule to ensure balanced and polished styling.
+This rule states that a person should wear no more than 7 visible elements or accessories at one time to avoid looking overdone or cluttered.
+Count these elements when styling:
 
-        ### Guidelines:
+### Guidelines:
 
-        - Aim for 5-7 total elements for a polished look
-        - 3-4 elements work well for minimalist or casual styling
-        - When one element is very bold or statement-making it will count as 2 points
-        - Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
-        - Wedding rings and simple stud earrings are often considered "neutral" and may not count
+- Aim for 5-7 total elements for a polished look
+- 3-4 elements work well for minimalist or casual styling
+- When one element is very bold or statement-making it will count as 2 points
+- Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
+- Wedding rings and simple stud earrings are often considered "neutral" and may not count
 
-        ### When creating outfits:
+### When creating outfits:
 
-        - Always mentally count the styling elements in any outfit concept you create
-        - If an outfit exceeds 7 points, consider a different combination
+- Always mentally count the styling elements in any outfit concept you create
+- If an outfit exceeds 7 points, consider a different combination
 
-        Apply this rule consistently to create harmonious, intentional outfits that look effortlessly put-together rather than overdone.
+Apply this rule consistently to create harmonious, intentional outfits that look effortlessly put-together rather than overdone.
 
-        ## Known user information:
-        - Positive styles: {wrapper.context.positive_styles}
-        - Negative styles: {wrapper.context.negative_styles}
-        - Positive brands: {wrapper.context.positive_brands}
-        - Negative brands: {wrapper.context.negative_brands}
-        - Positive colors: {wrapper.context.positive_colors}
-        - Negative colors: {wrapper.context.negative_colors}
-        - Gender: {wrapper.context.gender}
+### Known user information:
+- Positive styles: {wrapper.context.positive_styles}
+- Negative styles: {wrapper.context.negative_styles}
+- Positive brands: {wrapper.context.positive_brands}
+- Negative brands: {wrapper.context.negative_brands}
+- Positive colors: {wrapper.context.positive_colors}
+- Negative colors: {wrapper.context.negative_colors}
+- Gender: {wrapper.context.gender}
 
-        ## Important:
-        - Do NOT fill out the `products` field, it will be filled later by the shopper agent.
+## Important:
+- Do NOT fill out the `products` field, it will be filled later by the shopper agent.
+- When giving points to the items, add a 1 sentence reasoning for the points you give in the `reasoning` field.
         """,
         output_type=OutfitConcept,
     )
@@ -257,20 +204,31 @@ class StylistService:
     shopper_agent = Agent[StylistServiceContext](
         name="shopper",
         model="gpt-4o",
-        instructions="""
-        ## Shopper Agent Instructions
-        You are a fashion shopper. 
-        You are given an outfit item and a list of products that we found on the internet. Your job is to evaluate the available products against the target outfit item and score them based on how well they match the item.
+        instructions=lambda wrapper, agent: f"""
+## Shopper Agent Instructions
+You are a fashion shopper. You are given an outfit item and a list of products that we found on the internet.
+Your job is to evaluate the available products against the target outfit item and score them based on how well they match the item.
 
-        Consider:
-        - Style coherence
-        - Brand alignment
-        - Occasion suitability
-        - Color harmony
-        - Overall aesthetic appeal
+### Guidelines:
+Evaluate each product against the target outfit item based on the following criteria:
+- Style coherence
+- Brand alignment
+- Occasion suitability
+- Color harmony
+- Overall aesthetic appeal
+- User's preferences (positive/negative styles, brands, colors)
+- Budget considerations (if applicable)
+- For each product, provide a score from 0 to 10, where 0 means the product does not match the item at all and 10 means it is a perfect match.
+- Provide a short 1 sentence reasoning for your score.
 
-        For each product, provide a score from 0 to 10, where 0 means the product does not match the item at all and 10 means it is a perfect match.
-        Provide a brief reasoning for your score (1-2 sentences).
+### User Information:
+- Positive styles: {wrapper.context.positive_styles}
+- Negative styles: {wrapper.context.negative_styles}
+- Positive brands: {wrapper.context.positive_brands}
+- Negative brands: {wrapper.context.negative_brands}
+- Positive colors: {wrapper.context.positive_colors}
+- Negative colors: {wrapper.context.negative_colors}
+- Gender: {wrapper.context.gender}
         """,
         output_type=list[OutfitProductEvaluation],
     )
@@ -278,15 +236,23 @@ class StylistService:
     evaluator_agent = Agent[StylistServiceContext](
         name="evaluator",
         instructions="""
-        ## Evaluator Agent Instructions
-        You are a fashion evaluator. Review the generated outfit and provide feedback.
-            Consider:
-            - Style coherence
-            - Brand alignment
-            - Occasion suitability
-            - Color harmony
-            - Overall aesthetic appeal
-        If the outfit meets the user's preferences, provide a positive evaluation and stop execution.
+## Evaluator Agent Instructions
+You are a fashion evaluator. Review the generated outfit and provide feedback.
+
+### Guidelines:
+Evaluate the outfit concept based on the following criteria:
+    - Style coherence
+    - Brand alignment
+    - Occasion suitability
+    - Color harmony
+    - Overall aesthetic appeal
+    - User's preferences (positive/negative styles, brands, colors)
+    - Budget considerations (if applicable)
+
+If the outfit meets the user's preferences, provide a positive evaluation and stop execution.
+
+### Important:
+- Your evaluation should be concise and brief.
         """,
         output_type=EvaluationFeedback,
     )
@@ -303,7 +269,7 @@ class StylistService:
 
             while True:
 
-                stylist: RunResult = await Runner.run(self.stylist_agent, input, context=self.context)
+                stylist: RunResult = await Runner.run(self.stylist_agent, analyst_result.final_output.user_prompt, context=self.context)
                 outfit_concept: OutfitConcept = stylist.final_output
 
                 item_to_products = self._fetch_products(outfit_concept.items)
@@ -312,7 +278,7 @@ class StylistService:
                 shopping_eval_tasks = []
                 for item in outfit_concept.items:
                     products = item_to_products[item]
-                    print(f"Evaluating item: {item.to_str()} against {len(products)} products")
+                    print(f"Evaluating item: {item.search_query} against {len(products)} products")
 
                     # Create input that includes both item and products
                     shopper_input = f"""
@@ -326,6 +292,7 @@ class StylistService:
 - Brand: {p.brand}
 - Price: ${p.price}\n''' for p in products])}
 """
+
                     task = Runner.run(self.shopper_agent, shopper_input, context=self.context)
                     shopping_eval_tasks.append((item, task))
 
@@ -349,7 +316,8 @@ class StylistService:
                         color=item.color,
                         type=item.type,
                         product=matching_product,
-                        points=item.points
+                        points=item.points,
+                        reasoning=item.reasoning
                     )
 
                     updated_items.append(updated_item)
@@ -363,20 +331,21 @@ class StylistService:
                     points=sum(item.points for item in updated_items),
                 )
 
-                evaluation: RunResult = await Runner.run(self.evaluator_agent, outfit_concept.to_str(), context=self.context)
-                evaluation_feedback: EvaluationFeedback = evaluation.final_output
+                # evaluation: RunResult = await Runner.run(self.evaluator_agent, outfit_concept.to_str(), context=self.context)
+                # evaluation_feedback: EvaluationFeedback = evaluation.final_output
 
-                print(f"Evaluation feedback: {evaluation_feedback.feedback} (Score: {evaluation_feedback.score})")
+                # print(f"Evaluation feedback: {evaluation_feedback.feedback} (Score: {evaluation_feedback.score})")
 
-                if evaluation_feedback.score == "pass":
-                    print("Outfit evaluation passed. Finalizing the outfit concept.")
-                    break
-                elif evaluation_feedback.score == "needs_improvement":
-                    print("Outfit evaluation needs improvement. Revising the outfit concept.")
-                    input = self._update_input(evaluation)
-                else:
-                    print("Outfit evaluation failed. Stopping execution.")
-                    return
+                # if evaluation_feedback.score == "pass":
+                #     print("Outfit evaluation passed. Finalizing the outfit concept.")
+                #     break
+                # elif evaluation_feedback.score == "needs_improvement":
+                #     print("Outfit evaluation needs improvement. Revising the outfit concept.")
+                #     input = self._update_input(evaluation)
+                # else:
+                #     print("Outfit evaluation failed. Stopping execution.")
+                #     return
+                break # skip evaluation for now, we can add it later
                 
             return outfit_concept
 
