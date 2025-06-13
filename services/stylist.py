@@ -8,6 +8,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
 from utils.helpers import Product, search_products
+from services.db import DbService
 
 @dataclass
 class AnalystResult:
@@ -95,6 +96,7 @@ class StylistServiceContext:
 
 class StylistService:
     def __init__(self, user: User, user_prompt: str):
+        self.db_service = DbService()
         self.context = StylistServiceContext(
             gender=user.gender,
             positive_styles=user.positive_styles,
@@ -345,8 +347,9 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 # else:
                 #     print("Outfit evaluation failed. Stopping execution.")
                 #     return
+
                 break # skip evaluation for now, we can add it later
-                
+
             return outfit_concept
 
 

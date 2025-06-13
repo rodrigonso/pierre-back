@@ -26,7 +26,7 @@ class Product(BaseModel):
 class SearchProductsResult(BaseModel):
     query: str
     products: list[Product]
-    item_type: str
+    type: str
     success: bool
     error_message: str = None
 
