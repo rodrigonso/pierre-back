@@ -5,7 +5,6 @@ import uuid
 from pydantic import BaseModel
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Any, List, Dict, Optional
 
 load_dotenv()
 
@@ -77,7 +76,7 @@ def get_product_details(product):
     product_info = product_info.json()
 
     product_details = product_info.get("product_results", {})
-    product_seller = product_info.get("seller_results", {}).get("online_sellers", [{}])[0]
+    product_seller = product_info.get("sellers_results", {}).get("online_sellers", [{}])[0]
 
     return Product(
         title=product_details.get("title", "No title"),
