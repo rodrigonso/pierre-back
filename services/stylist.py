@@ -108,6 +108,7 @@ class StylistService:
             user_prompt=user_prompt
         )
 
+# ============= Helpers ============
     def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
         return ItemHelpers.text_message_outputs(new_input.new_items)
 
@@ -133,11 +134,12 @@ class StylistService:
                     products = future.result()
                     results[item] = products
                 except Exception as exc:
-                    print(f'Item {item.to_str()} generated an exception: {exc}')
+                    print(f'Item generated an exception:\n{item.to_str()}\n Exception: {exc}\n')
                     results[item] = []  # Add empty list for failed searches
 
         return results
 
+# ============= Agents ============
     analyst_agent = Agent[StylistServiceContext](
         name="analyst",
         model="gpt-4o", 

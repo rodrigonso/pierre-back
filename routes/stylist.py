@@ -1,12 +1,16 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime
 from typing import List
 from pydantic import BaseModel
 from services.stylist import StylistService, OutfitConcept, StylistServiceContext
+from services.auth import AuthService
 from utils.models import User
 
 # Create router for stylist endpoints
 router = APIRouter()
+
+# Initialize auth service
+auth_service = AuthService()
 
 class CreateOutfitResponse(BaseModel):
     user_prompt: str
@@ -14,31 +18,36 @@ class CreateOutfitResponse(BaseModel):
     success: bool = True
 
 class CreateOutfitRequest(BaseModel):
-    user_prompt: str
-    gender: str
-    positive_styles: List[str] = []
-    negative_styles: List[str] = []
-
-    positive_brands: List[str] = []
-    negative_brands: List[str] = []
-    
-    positive_colors: List[str] = []
-    negative_colors: List[str] = []
+    user_id: str
+    prompt: str
 
 @router.post("/stylist/create-outfit", response_model=CreateOutfitResponse)
 async def create_stylist(request: CreateOutfitRequest):
 
     try:
-        print("Received request to create outfit with prompt:", request.user_prompt)
+        print("Received request to create outfit with prompt:", request.prompt)
 
-        # TODO: grab the user info from the request context or session
-        user = StylistServiceContext(**request.model_dump())
+        # Get user information using dependency injection
+        user = auth_service.get_user_by_id(request.user_id)
+        print("User retrieved:", user)
+        
+        # Create stylist service context from user data
+        context = StylistServiceContext(
+            gender=user.gender or "unspecified",
+            positive_styles=user.positive_styles,
+            negative_styles=user.negative_styles,
+            positive_brands=user.positive_brands,
+            negative_brands=user.negative_brands,
+            positive_colors=user.positive_colors,
+            negative_colors=user.negative_colors,
+            user_prompt=request.prompt
+        )
 
-        service = StylistService(user=user, user_prompt=request.user_prompt)
+        service = StylistService(user=context, user_prompt=request.prompt)
         res: OutfitConcept = await service.run()
 
         return CreateOutfitResponse(
-            user_prompt=request.user_prompt,
+            user_prompt=request.prompt,
             outfits=[res],
             success=True
         )

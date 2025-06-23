@@ -103,6 +103,8 @@ def search_products(query: str) -> list[Product]:
         "direct_link": True
     }
 
+    print(f"Searching for products with query: {query}")
+
     search = GoogleSearch(params)
     results = search.get_dict()
     shopping_results = results.get("shopping_results", [])

@@ -123,7 +123,7 @@ class AuthService:
                 # Create User model instance
                 user = User(
                     id=response.user.id,
-                    name=user_metadata.get("name") or profile_data.get("full_name"),
+                    name=user_metadata.get("name") or profile_data.get("name"),
                     gender=user_metadata.get("gender") or profile_data.get("gender"),
                     positive_brands=profile_data.get("positive_brands", []),
                     negative_brands=profile_data.get("negative_brands", []),
