@@ -18,6 +18,7 @@ router = APIRouter()
 auth_service = get_auth_service()
 logger_service = get_logger_service()
 image_service = get_image_service()
+database_service = get_database_service()
 
 class CreateOutfitResponse(BaseModel):
     user_prompt: str
@@ -26,6 +27,7 @@ class CreateOutfitResponse(BaseModel):
 
 class CreateOutfitRequest(BaseModel):
     prompt: str
+    number_of_outfits: Optional[int] = 1
 
 
 def _convert_outfit_to_database_models(outfit: Outfit):
@@ -69,42 +71,67 @@ def _convert_outfit_to_database_models(outfit: Outfit):
     
     return db_outfit, db_products
 
+def _generate_outfit_image(outfit: Outfit) -> str:
+    """
+    Generate an image for the given outfit concept.
+    
+    Args:
+        outfit: The generated OutfitConcept from the stylist service
+        
+    Returns:
+        URL of the generated outfit image
+    """
+    logger_service.info(f"Generating outfit image for: {outfit.name}")
+    outfit_image = image_service.generate_image(outfit)
+    logger_service.success(f"Outfit image generated: {outfit_image}")
+    return outfit_image
+
+def _save_outfit_to_db(outfit: Outfit) -> str:
+    """
+    Save the generated outfit to the database.
+    
+    Args:
+        outfit: The generated OutfitConcept from the stylist service
+        
+    Returns:
+        Dictionary with success status and outfit ID
+    """
+    db_outfit, db_products = _convert_outfit_to_database_models(outfit)
+    logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
+    
+    save_result = database_service.insert_outfit_with_products(db_outfit, db_products)
+    
+    if not save_result['success']:
+        logger_service.error(f"Failed to save outfit '{db_outfit.title}' to database: {save_result['error']}")
+        return {'success': False, 'error': save_result['error']}
+    
+    logger_service.success(f"Outfit '{db_outfit.title}' saved to database with ID: {save_result['outfit_id']}")
+    return save_result['outfit_id']
+
 @router.post("/stylist/outfit", response_model=CreateOutfitResponse)
 async def create_outfit(
     request: CreateOutfitRequest, 
     user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
 ):
     try:
-        logger_service.info(f"Generating outfit for user: {user.id} with prompt: {request.prompt}")
+        logger_service.info(f"Generating outfit for user: {user.id} with prompt: {request.prompt} and number of outfits: {request.number_of_outfits}")
         logger_service.debug(f"Provided user data: {user.model_dump()}")
 
         # Create stylist service context from user data
         stylist_service = StylistService(user=user, user_prompt=request.prompt)
         outfit: Outfit = await stylist_service.run()
-
         logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
 
-        logger_service.info(f"Generating outfit image for: {outfit.name}")
-        outfit_image = image_service.generate_image(outfit)
-        outfit.image_url = outfit_image
-        logger_service.success(f"Outfit image generated: {outfit_image}") 
+        outfit.image_url = _generate_outfit_image(outfit)
 
         # Convert outfit concept to database models
         db_outfit, db_products = _convert_outfit_to_database_models(outfit)
         logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
 
         # Save to database
-        save_result = db_service.insert_outfit_with_products(db_outfit, db_products)
+        outfit_id = _save_outfit_to_db(outfit)
+        outfit.id = outfit_id
 
-        if save_result['success'] is False:
-            logger_service.error(f"Failed to save outfit '{db_outfit.title}' to database: {save_result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save outfit: {save_result['error']}"
-            )
-
-        logger_service.success(f"Outfit '{db_outfit.title}' saved to database with ID: {save_result['outfit_id']}")
         return CreateOutfitResponse(
             user_prompt=request.prompt,
             outfits=[outfit],

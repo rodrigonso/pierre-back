@@ -66,17 +66,12 @@ class ImageService:
             uploaded_image = self.client.files.upload(file=file_path)
             files.append(uploaded_image)
 
-        # Delete all files from the images dir
-        for file_path in temp_files:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-
-        return files
+        return files, temp_files
 
     def generate_image(self, outfit: Outfit):
-        product_images = self._process_products(outfit.products)
+        images, temp_images = self._process_products(outfit.products)
 
-        user_parts = [types.Part.from_uri(file_uri=image.uri, mime_type=image.mime_type) for image in product_images]
+        user_parts = [types.Part.from_uri(file_uri=image.uri, mime_type=image.mime_type) for image in images]
         user_parts.append(types.Part.from_text(text="""Generate an image of a female model on a neutral background wearing the garments from the images provided."""))
 
         contents = [types.Content(role="user", parts=user_parts)]
@@ -89,12 +84,17 @@ class ImageService:
                 file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
                 binary_data = candidate.content.parts[0].inline_data.data
                 generated_image_url = database_service.upload_image(file_name, binary_data)
-                logger_service.success(f"Generated image URL: {generated_image_url}")
 
                 break
+            else:
+                logger_service.warning("No inline data found in the response candidate.")
+
+                # Delete all files from the images dir
+        for file_path in temp_images:
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
         return generated_image_url
-    
 
 image_service = ImageService()
 def get_image_service() -> ImageService:

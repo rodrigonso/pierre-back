@@ -8,9 +8,12 @@ import uuid
 from utils.models import User
 from utils.auth import get_current_user
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
+from services.logger import get_logger_service
 
 # Create router for outfit endpoints
 router = APIRouter()
+logger_service = get_logger_service()
+database_service = get_database_service()
 
 # ============================================================================
 # PYDANTIC MODELS FOR REQUEST/RESPONSE
@@ -30,6 +33,12 @@ class OutfitUpdateRequest(BaseModel):
     description: Optional[str] = None
     image_url: Optional[str] = None
     user_prompt: Optional[str] = None
+
+class OutfitSearchRequest(BaseModel):
+    """Request model for searching outfits"""
+    query: str
+    page: int = 1
+    page_size: int = 10
 
 class OutfitResponse(BaseModel):
     """Response model for outfit data"""
@@ -142,9 +151,8 @@ async def get_outfits(
 async def get_user_liked_outfits(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
-) -> ListOutfitResponse:
+    current_user: User = Depends(get_current_user)
+    ) -> ListOutfitResponse:
     """
     Get all outfits that the current user has liked with pagination.
     
@@ -162,7 +170,7 @@ async def get_user_liked_outfits(
     """
     try:
         # Get user's liked outfits using the database service
-        result = db_service.get_user_liked_outfits(
+        result = database_service.get_user_liked_outfits(
             user_id=current_user.id,
             page=page,
             page_size=page_size
@@ -197,21 +205,116 @@ async def get_user_liked_outfits(
             status_code=500,
             detail=f"Failed to retrieve liked outfits: {str(e)}"
         )
+    
+@router.get("/outfits/search", response_model=ListOutfitResponse)
+async def search_outfits(
+    query: str = Query(..., description="Search query for outfits"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(10, ge=1, description="Number of items per page"),
+    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+) -> ListOutfitResponse:
+    """
+    Search outfits based on title, description, and user prompt.
+    
+    This endpoint performs a text search across outfit titles, descriptions, and user prompts
+    to find outfits that match the user's search query. The search is case-insensitive and
+    supports partial matching.
+    
+    Args:
+        query: Search query string to match against outfit content
+        page: Page number (starting from 1)
+        page_size: Number of outfits per page (max 100)
+        current_user: Authenticated user
+        db_service: Database service dependency
+        
+    Returns:
+        ListOutfitResponse: List of matching outfits with pagination info
+        
+    Raises:
+        HTTPException: If database operation fails or query is invalid
+    """
+    try:
+        logger_service.info(f"Searching outfits with query: {query}, page: {page}, page_size: {page_size}")
+        # Validate query parameter
+        if not query or len(query.strip()) < 2:
+            logger_service.warning("Search query must be at least 2 characters long")
+            raise HTTPException(
+                status_code=400,
+                detail="Search query must be at least 2 characters long"
+            )
+        
+        # Calculate offset for pagination
+        offset = (page - 1) * page_size
+        
+        # Prepare search pattern for ILIKE (case-insensitive partial matching)
+        search_pattern = f"%{query.strip()}%"
+        logger_service.info(f"Search pattern: {search_pattern}, offset: {offset}, page_size: {page_size}")
+          # Search outfits using PostgreSQL ILIKE for fuzzy text matching
+        # Search across title, description, and user_prompt fields
+        search_result = database_service.supabase.table("outfits").select(
+            "*"
+        ).or_(
+            f"title.ilike.{search_pattern},"
+            f"description.ilike.{search_pattern},"
+            f"user_prompt.ilike.{search_pattern}"
+        ).order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+
+        logger_service.info(f"Found {len(search_result.data)} outfits matching query")
+
+        # Get total count for pagination using the same search criteria
+        count_result = database_service.supabase.table("outfits").select(
+            "id", count="exact"
+        ).or_(
+            f"title.ilike.{search_pattern},"
+            f"description.ilike.{search_pattern},"
+            f"user_prompt.ilike.{search_pattern}"
+        ).execute()
+        
+        total_count = count_result.count if count_result.count else 0
+        
+        # Convert to response format
+        outfit_responses = []
+        for outfit in search_result.data:
+            # Get associated products for each outfit
+            outfit_with_products = database_service.get_outfit_with_products(outfit["id"])
+            products = outfit_with_products.get("products", []) if outfit_with_products else []
+            
+            outfit_responses.append(OutfitResponse(
+                id=outfit["id"],
+                title=outfit.get("title"),
+                description=outfit.get("description"),
+                image_url=outfit.get("image_url"),
+                user_prompt=outfit.get("user_prompt"),
+                created_at=outfit["created_at"],
+                products=products
+            ))
+        
+        return ListOutfitResponse(
+            outfits=outfit_responses,
+            total_count=total_count,
+            page=page,
+            page_size=page_size
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to search outfits: {str(e)}"
+        )
 
 @router.get("/outfits/{outfit_id}", response_model=OutfitResponse)
 async def get_outfit_by_id(
     outfit_id: int,
     current_user: User = Depends(get_current_user), # just to ensure user is authenticated
-    db_service: DatabaseService = Depends(get_database_service)
 ) -> OutfitResponse:
     """
     Get a specific outfit by ID with all associated products.
     
     Args:
         outfit_id: ID of the outfit to retrieve
-        current_user: Authenticated user
-        db_service: Database service dependency
-        
+        current_user: Authenticated user        
     Returns:
         OutfitResponse: Outfit data with associated products
         
@@ -219,7 +322,7 @@ async def get_outfit_by_id(
         HTTPException: If outfit not found or database operation fails
     """
     try:
-        outfit_data = db_service.get_outfit_with_products(outfit_id)
+        outfit_data = database_service.get_outfit_with_products(outfit_id)
         
         if not outfit_data:
             raise HTTPException(
@@ -251,8 +354,7 @@ async def get_outfit_by_id(
 @router.post("/outfits/", response_model=OperationOutfitResponse)
 async def create_outfit(
     request: OutfitCreateRequest,
-    current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
+    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
 ) -> OperationOutfitResponse:
     """
     Create a new outfit.
@@ -260,7 +362,6 @@ async def create_outfit(
     Args:
         request: Outfit creation data
         current_user: Authenticated user
-        db_service: Database service dependency
         
     Returns:
         OperationOutfitResponse: Success status and outfit ID
@@ -282,7 +383,7 @@ async def create_outfit(
         if request.products:
             # Retrieve product data for the provided IDs
             for product_id in request.products:
-                product_result = db_service.supabase.table("products").select(
+                product_result = database_service.supabase.table("products").select(
                     "*"
                 ).eq("id", product_id).execute()
                 
@@ -301,7 +402,7 @@ async def create_outfit(
                     ))
         
         # Insert outfit with products
-        result = db_service.insert_outfit_with_products(outfit, products)
+        result = database_service.insert_outfit_with_products(outfit, products)
         
         if result["success"]:
             return OperationOutfitResponse(
@@ -331,7 +432,6 @@ async def create_outfit(
 async def like_outfit(
     outfit_id: int,
     current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
 ) -> LikeOutfitResponse:
     """
     Like an outfit for the current user.
@@ -342,7 +442,6 @@ async def like_outfit(
     Args:
         outfit_id: ID of the outfit to like
         current_user: Authenticated user who is liking the outfit
-        db_service: Database service dependency
         
     Returns:
         LikeOutfitResponse: Success status with like information
@@ -352,7 +451,7 @@ async def like_outfit(
     """
     try:
         # Use the database service to handle the like operation
-        result = db_service.like_outfit(user_id=current_user.id, outfit_id=outfit_id)
+        result = database_service.like_outfit(user_id=current_user.id, outfit_id=outfit_id)
         
         if result["success"]:
             return LikeOutfitResponse(
@@ -379,7 +478,6 @@ async def like_outfit(
 async def dislike_outfit(
     outfit_id: int,
     current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
 ) -> LikeOutfitResponse:
     """
     Unlike (remove like from) an outfit for the current user.
@@ -390,7 +488,6 @@ async def dislike_outfit(
     Args:
         outfit_id: ID of the outfit to unlike
         current_user: Authenticated user who is unliking the outfit
-        db_service: Database service dependency
         
     Returns:
         LikeOutfitResponse: Success status with unlike information
@@ -400,7 +497,7 @@ async def dislike_outfit(
     """
     try:
         # Use the database service to handle the unlike operation
-        result = db_service.dislike_outfit(user_id=current_user.id, outfit_id=outfit_id)
+        result = database_service.dislike_outfit(user_id=current_user.id, outfit_id=outfit_id)
         
         if result["success"]:
             return LikeOutfitResponse(
