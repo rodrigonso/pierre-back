@@ -1,6 +1,4 @@
-import logfire
-import os
-from agents import Agent, Runner, trace, TResponseInputItem, ItemHelpers, function_tool, RunResult
+from agents import Agent, Runner, trace, TResponseInputItem, ItemHelpers, RunResult
 from pydantic import BaseModel
 from typing import Literal, Optional
 from dataclasses import dataclass
@@ -8,6 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
 from utils.helpers import SearchProduct, search_products
+import textwrap
 
 @dataclass
 class AnalystResult:
@@ -93,7 +92,6 @@ class StylistServiceContext:
 
     user_prompt: str
 
-
 class Product(BaseModel):
     id: str
     type: str
@@ -159,6 +157,40 @@ class StylistService:
                     results[item] = []  # Add empty list for failed searches
 
         return results
+
+    def _convert_outfit_concept_to_outfit(self, outfit_concept: OutfitConcept) -> Outfit:
+        """
+        Convert an OutfitConcept to an Outfit model.
+        This is a utility function to convert the final output of the stylist service.
+        """
+        pydantic_products = []
+        for item in outfit_concept.items:
+            if item.product is not None:
+                # Convert helper Product to Pydantic Product
+                pydantic_product = Product(
+                    id=item.product.id,
+                    type=item.type,
+                    search_query=item.search_query,
+                    color=item.color,
+                    points=item.points,
+                    title=item.product.title,
+                    brand=item.product.brand,
+                    price=item.product.price,
+                    link=item.product.link,
+                    images=item.product.images,
+                    description=item.product.description
+                )
+                pydantic_products.append(pydantic_product)
+        
+        return Outfit(
+            id=None,
+            points=outfit_concept.points,
+            name=outfit_concept.name,
+            description=outfit_concept.description,
+            products=pydantic_products,
+            image_url=None,  # No image URL available in current outfit concept
+            user_prompt=self.context.user_prompt
+        )
 
 # ============= Agents ============
     analyst_agent = Agent[StylistServiceContext](
@@ -373,35 +405,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
 
                 break # skip evaluation for now, we can add it later
 
-        # Convert OutfitConcept to Outfit
-        pydantic_products = []
-        for item in outfit_concept.items:
-            if item.product is not None:
-                # Convert helper Product to Pydantic Product
-                pydantic_product = Product(
-                    id=item.product.id,
-                    type=item.type,
-                    search_query=item.search_query,
-                    color=item.color,
-                    points=item.points,
-                    title=item.product.title,
-                    brand=item.product.brand,
-                    price=item.product.price,
-                    link=item.product.link,
-                    images=item.product.images,
-                    description=item.product.description
-                )
-                pydantic_products.append(pydantic_product)
-        
-        return Outfit(
-            id=None,
-            points=outfit_concept.points,
-            name=outfit_concept.name,
-            description=outfit_concept.description,
-            products=pydantic_products,
-            image_url=None,
-            user_prompt=self.context.user_prompt
-        )
+        return self._convert_outfit_concept_to_outfit(outfit_concept)
 
 
 

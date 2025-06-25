@@ -80,9 +80,7 @@ class AuthService:
             profile_response = self.supabase.table("profiles").select("*").eq("id", auth_user.id).execute()
             
             if not profile_response.data:
-                # If no profile exists, create a default one
-                await self.create_user_profile(auth_user.id, auth_user.email or "")
-                profile_response = self.supabase.table("profiles").select("*").eq("id", auth_user.id).execute()
+                raise Exception("User profile not found in database")
             
             if profile_response.data:
                 profile = profile_response.data[0]

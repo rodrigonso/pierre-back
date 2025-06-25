@@ -465,6 +465,22 @@ class DatabaseService:
                 "message": error_msg
             }
 
+    def upload_image(self, file_name: str, data: bytes) -> str:
+        """
+        Uploads a binary file to a Supabase storage bucket and returns the public URL.
+
+        :param file_name: The name of the file to save in the bucket.
+        :param data: The binary data of the file.
+        :return: The public URL of the uploaded file.
+        """
+        # Upload the file to the specified bucket
+        response = self.supabase.storage.from_('generated-images').upload(file_name, data)
+        print(response)
+
+        # Generate the public URL for the uploaded file
+        public_url = self.supabase.storage.from_('generated-images').get_public_url(file_name)
+        return public_url
+
 # Create a singleton instance for use across the application
 db_service = DatabaseService()
 
