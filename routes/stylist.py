@@ -8,7 +8,7 @@ from services.auth import AuthService
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
 from utils.models import User
 from utils.auth import get_current_user
-from services.image import ImageService
+from services.image import get_image_service
 
 # Create router for stylist endpoints
 router = APIRouter()
@@ -85,7 +85,7 @@ async def create_outfit(
         print(f"\n✅ Generated outfit concept: {outfit.name}")
 
         print(f"📝 Generating outfit image: {outfit.name}...")
-        image_service = ImageService()
+        image_service = get_image_service()
         outfit_image = image_service.generate_image(outfit)
         outfit.image_url = outfit_image 
         print(f"✅ Generated outfit image: {outfit_image}")

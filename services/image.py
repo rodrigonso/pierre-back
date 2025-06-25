@@ -89,3 +89,15 @@ class ImageService:
                 break
 
         return generated_image_url
+    
+
+image_service = ImageService()
+def get_image_service() -> ImageService:
+    """
+    Dependency to provide the ImageService instance.
+    This can be used in route handlers that require image generation functionality.
+    
+    Returns:
+        ImageService: Instance of the ImageService
+    """
+    return image_service
