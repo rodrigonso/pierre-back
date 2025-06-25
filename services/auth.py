@@ -1,5 +1,5 @@
 from fastapi import HTTPException, status
-from fastapi.security import HTTPBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import create_client, Client
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from pydantic import BaseModel
 from typing import List
+from utils.models import User
 
 # Load environment variables
 load_dotenv()
@@ -51,146 +52,116 @@ class AuthService:
         self.anon_client = supabase_anon
         self.guest_request_limit = 3  # Maximum requests per guest
 
-    def verify_token(self, token: str) -> User:
+    async def get_current_user(self, token: str) -> Optional[User]:
         """
-        Verify JWT token and return user data.
+        Get the current authenticated user from a JWT token.
         
         Args:
-            token: JWT token to verify
+            token: JWT access token from Supabase Auth
             
         Returns:
-            User: User model instance with profile data
+            User: User model with preferences or None if authentication fails
             
         Raises:
-            HTTPException: If token is invalid or expired
+            Exception: If token verification or user data retrieval fails
         """
         try:
-            # Use Supabase to verify the token
-            response = self.anon_client.auth.get_user(token)
-            if response.user:
-                # Get additional user profile data from the profiles table
-                profile_response = self.supabase.table("profiles").select("*").eq("id", response.user.id).execute()
-                
-                # Extract user metadata for User model
-                user_metadata = response.user.user_metadata or {}
-                profile_data = profile_response.data[0] if profile_response.data else {}
-                
-                # Create User model instance
-                user = User(
-                    id=response.user.id,
-                    name=user_metadata.get("name") or profile_data.get("full_name"),
-                    gender=user_metadata.get("gender") or profile_data.get("gender"),
-                    positive_brands=profile_data.get("positive_brands", []),
-                    negative_brands=profile_data.get("negative_brands", []),
-                    positive_styles=profile_data.get("positive_styles", []),
-                    negative_styles=profile_data.get("negative_styles", []),
-                    positive_colors=profile_data.get("positive_colors", []),
-                    negative_colors=profile_data.get("negative_colors", [])
+
+            print(f"Verifying token: {token}")
+            # Verify the JWT token with Supabase
+            response = self.supabase.auth.get_user(token)
+            
+            if not response.user:
+                return None
+            
+            auth_user = response.user
+            
+            # Get user profile from the profiles table
+            profile_response = self.supabase.table("profiles").select("*").eq("id", auth_user.id).execute()
+            
+            if not profile_response.data:
+                # If no profile exists, create a default one
+                await self.create_user_profile(auth_user.id, auth_user.email or "")
+                profile_response = self.supabase.table("profiles").select("*").eq("id", auth_user.id).execute()
+            
+            if profile_response.data:
+                profile = profile_response.data[0]
+                  # Map database fields to User model
+                return User(
+                    id=profile["id"],
+                    name=profile.get("name"),
+                    gender=profile.get("gender"),
+                    positive_brands=profile.get("positive_brands", []),
+                    negative_brands=profile.get("negative_brands", []),
+                    positive_styles=profile.get("positive_styles", []),
+                    negative_styles=profile.get("negative_styles", []),
+                    positive_colors=profile.get("positive_colors", []),
+                    negative_colors=profile.get("negative_colors", [])
                 )
-                return user
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token"
-                )
+            
+            return None
+            
         except Exception as e:
-            print(f"Token verification error: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token"
-            )
+            print(f"Error getting current user: {e}")
+            raise Exception(f"Failed to authenticate user: {str(e)}")
+
+    def verify_token(self, token: str) -> Dict[str, Any]:
+        """
+        Verify a JWT token and return user information.
         
+        Args:
+            token: JWT access token
+            
+        Returns:
+            Dict containing user information
+            
+        Raises:
+            HTTPException: If token is invalid
+        """
+        try:
+            response = self.supabase.auth.get_user(token)
+            
+            if not response.user:
+                raise HTTPException(status_code=401, detail="Invalid token")
+            
+            return {
+                "user_id": response.user.id,
+                "email": response.user.email,
+                "authenticated": True
+            }
+            
+        except Exception as e:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+
     def get_user_by_id(self, user_id: str) -> Optional[User]:
         """
         Get user data by user ID.
         
         Args:
-            user_id: The user's unique identifier
+            user_id: User's unique identifier
             
         Returns:
-            User: User model instance or None if user not found
+            User model containing user data or None if not found
         """
         try:
-            response = self.supabase.auth.admin.get_user_by_id(user_id)
-            if response.user:
-                # Get additional user profile data from the profiles table
-                profile_response = self.supabase.table("profiles").select("*").eq("id", user_id).execute()
-                
-                # Extract user metadata for User model
-                user_metadata = response.user.user_metadata or {}
-                profile_data = profile_response.data[0] if profile_response.data else {}
-                
-                # Create User model instance
-                user = User(
-                    id=response.user.id,
-                    name=user_metadata.get("name") or profile_data.get("name"),
-                    gender=user_metadata.get("gender") or profile_data.get("gender"),
-                    positive_brands=profile_data.get("positive_brands", []),
-                    negative_brands=profile_data.get("negative_brands", []),
-                    positive_styles=profile_data.get("positive_styles", []),
-                    negative_styles=profile_data.get("negative_styles", []),
-                    positive_colors=profile_data.get("positive_colors", []),
-                    negative_colors=profile_data.get("negative_colors", [])
-                )
-                return user
-            return None
-        except Exception as e:
-            print(f"Error getting user: {e}")
-            return None
-
-    def create_user_profile(self, user_id: str, email: str, metadata: Dict[str, Any] = None) -> Optional[User]:
-        """
-        Create or update user profile in the profiles table.
-        
-        Args:
-            user_id: The user's unique identifier
-            email: User's email address
-            metadata: Additional user metadata (optional)
-            
-        Returns:
-            User: User model instance or None if failed
-        """
-        try:
-            profile_data = {
-                "id": user_id,
-                "email": email,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
-                "positive_brands": [],
-                "negative_brands": [],
-                "positive_styles": [],
-                "negative_styles": [],
-                "positive_colors": [],
-                "negative_colors": []
-            }
-            
-            if metadata:
-                profile_data.update({
-                    "full_name": metadata.get("full_name"),
-                    "avatar_url": metadata.get("avatar_url"),
-                    "provider": metadata.get("provider"),
-                    "gender": metadata.get("gender")
-                })
-
-            # Upsert user profile
-            response = self.supabase.table("profiles").upsert(profile_data).execute()
+            response = self.supabase.table("profiles").select("*").eq("id", user_id).execute()
             
             if response.data:
-                created_profile = response.data[0]
-                # Create User model instance from the created profile
-                user = User(
-                    id=created_profile["id"],
-                    name=created_profile.get("full_name"),
-                    gender=created_profile.get("gender"),
-                    positive_brands=created_profile.get("positive_brands", []),
-                    negative_brands=created_profile.get("negative_brands", []),
-                    positive_styles=created_profile.get("positive_styles", []),
-                    negative_styles=created_profile.get("negative_styles", []),
-                    positive_colors=created_profile.get("positive_colors", []),
-                    negative_colors=created_profile.get("negative_colors", [])
+                profile = response.data[0]
+                return User(
+                    id=profile["id"],
+                    name=profile.get("name"),
+                    gender=profile.get("gender"),
+                    positive_brands=profile.get("positive_brands", []),
+                    negative_brands=profile.get("negative_brands", []),
+                    positive_styles=profile.get("positive_styles", []),
+                    negative_styles=profile.get("negative_styles", []),
+                    positive_colors=profile.get("positive_colors", []),
+                    negative_colors=profile.get("negative_colors", [])
                 )
-                return user
+
             return None
+            
         except Exception as e:
-            print(f"Error creating user profile: {e}")
+            print(f"Error getting user by ID: {e}")
             return None

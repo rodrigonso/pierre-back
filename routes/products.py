@@ -4,7 +4,7 @@ import uuid
 from typing import List
 from pydantic import BaseModel
 from utils.models import User
-from auth import get_current_user
+from utils.auth import get_current_user
 
 # Create router for product endpoints
 router = APIRouter()

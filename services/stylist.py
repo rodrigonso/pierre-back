@@ -7,8 +7,7 @@ from dataclasses import dataclass
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
-from utils.helpers import Product, search_products
-from services.db import DbService
+from utils.helpers import SearchProduct, search_products
 
 @dataclass
 class AnalystResult:
@@ -27,10 +26,10 @@ class AnalystResult:
 class OutfitItem:
     search_query: str
     color: str
-    type: str
+    type: Literal["top", "bottom", "dress", "outerwear", "shoes", "accessories", "jewelry"]
     reasoning: str
     points: int = 0
-    product: Optional[Product] = None
+    product: Optional[SearchProduct] = None
 
     def to_str(self) -> str:
         return f"""
@@ -94,9 +93,31 @@ class StylistServiceContext:
 
     user_prompt: str
 
+
+class Product(BaseModel):
+    id: str
+    type: str
+    title: str
+    brand: str
+    price: float
+    link: str
+    images: list[str]
+    description: str
+    search_query: str
+    points: int
+    color: str
+
+class Outfit(BaseModel):
+    id: Optional[str]
+    name: str
+    description: str
+    products: list[Product]
+    image_url: Optional[str] = None
+    user_prompt: str
+    points: int
+
 class StylistService:
     def __init__(self, user: User, user_prompt: str):
-        self.db_service = DbService()
         self.context = StylistServiceContext(
             gender=user.gender,
             positive_styles=user.positive_styles,
@@ -261,7 +282,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
         output_type=EvaluationFeedback,
     )
 
-    async def run(self) -> None:
+    async def run(self) -> Outfit:
         with trace("Pierre"):
 
             # Initial conversation setup
@@ -317,8 +338,8 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                     # Create new item with the best matching product
                     updated_item = OutfitItem(
                         search_query=item.search_query,
-                        color=item.color,
-                        type=item.type,
+                        color=item.color.lower(),
+                        type=item.type.lower(),
                         product=matching_product,
                         points=item.points,
                         reasoning=item.reasoning
@@ -352,7 +373,35 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
 
                 break # skip evaluation for now, we can add it later
 
-            return outfit_concept
+        # Convert OutfitConcept to Outfit
+        pydantic_products = []
+        for item in outfit_concept.items:
+            if item.product is not None:
+                # Convert helper Product to Pydantic Product
+                pydantic_product = Product(
+                    id=item.product.id,
+                    type=item.type,
+                    search_query=item.search_query,
+                    color=item.color,
+                    points=item.points,
+                    title=item.product.title,
+                    brand=item.product.brand,
+                    price=item.product.price,
+                    link=item.product.link,
+                    images=item.product.images,
+                    description=item.product.description
+                )
+                pydantic_products.append(pydantic_product)
+        
+        return Outfit(
+            id=None,
+            points=outfit_concept.points,
+            name=outfit_concept.name,
+            description=outfit_concept.description,
+            products=pydantic_products,
+            image_url=None,
+            user_prompt=self.context.user_prompt
+        )
 
 
 

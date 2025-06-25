@@ -1,12 +1,10 @@
-from supabase import create_client, Client
-from typing import Optional, List, Dict, Any
+from supabase import Client, create_client
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
-from datetime import datetime
-from pydantic import BaseModel
-from utils.models import Product, Outfit
 import uuid
-import json
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
@@ -18,580 +16,464 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("Missing Supabase configuration in environment variables")
 
-# Database-specific Pydantic models
-class DbProduct(BaseModel):
-    """Pydantic model for product database operations"""
+# Create Supabase service client (with elevated permissions)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+
+class DatabaseProduct(BaseModel):
+    """
+    Pydantic model for product data to be inserted into the database.
+    
+    Attributes:
+        id: Unique identifier for the product
+        type: Product category/type (e.g., "dress", "shoes", "accessory")
+        search_query: Original search query used to find this product
+        link: URL link to the product
+        title: Product title/name
+        price: Product price as string (to handle various formats)
+        images: List of image URLs
+        brand: Product brand name
+        description: Product description
+    """
     id: str
-    type: Optional[str] = None
-    search_query: Optional[str] = None
-    link: Optional[str] = None
-    title: Optional[str] = None
-    price: Optional[str] = None  # Stored as string to handle various formats
-    images: Optional[List[str]] = None
-    brand: Optional[str] = None
-    description: Optional[str] = None
-    created_at: Optional[datetime] = None
+    type: str
+    search_query: str
+    link: str
+    title: str
+    price: float
+    images: List[str]
+    brand: str
+    description: str
+    color: str
+    points: int
 
-class DbOutfit(BaseModel):
-    """Pydantic model for outfit database operations"""
-    id: Optional[int] = None
-    title: Optional[str] = None
-    description: Optional[str] = None
+
+class DatabaseOutfit(BaseModel):
+    """
+    Pydantic model for outfit data to be inserted into the database.
+    
+    Attributes:
+        title: Outfit name/title
+        description: Outfit description
+        image_url: URL to outfit image/preview
+        user_prompt: Original user prompt that generated this outfit
+    """
+    title: str
+    description: str
     image_url: Optional[str] = None
-    user_prompt: Optional[str] = None
-    created_at: Optional[datetime] = None
+    user_prompt: str
+    points: int
 
-class DbProductOutfitJunction(BaseModel):
-    """Pydantic model for product-outfit relationship"""
-    outfit_id: int
-    product_id: str
-    created_at: Optional[datetime] = None
 
-class DbService:
+class DatabaseService:
     """
-    Database service for handling operations with Supabase database.
-    Provides methods for managing outfits, products, and their relationships.
-    """
+    Database service for handling CRUD operations on outfits and products.
     
+    This service provides methods for:
+    - Inserting outfits with their associated products
+    - Creating relationships in the product_outfit_junction table
+    - Managing database transactions for data consistency
+    """
+
     def __init__(self):
-        """Initialize the DbService with Supabase client using service role."""
-        self.client: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    
-    # ============================================================================
-    # PRODUCT OPERATIONS
-    # ============================================================================
-    
-    async def create_product(self, product: Product) -> Optional[DbProduct]:
+        """Initialize the database service with Supabase client."""
+        self.supabase = supabase
+
+    def insert_outfit_with_products(
+        self, 
+        outfit: DatabaseOutfit, 
+        products: List[DatabaseProduct]
+    ) -> Dict[str, Any]:
         """
-        Create a new product in the database.
+        Insert a new outfit along with its products and create the necessary relationships.
+        
+        This method performs the following operations in sequence:
+        1. Insert each product into the products table (if not already exists)
+        2. Insert the outfit into the outfits table
+        3. Create relationships in the product_outfit_junction table
         
         Args:
-            product: Product object to create
+            outfit: DatabaseOutfit model containing outfit information
+            products: List of DatabaseProduct models to associate with the outfit
             
         Returns:
-            DbProduct: Created product or None if failed
-            
+            Dict containing:
+                - success: Boolean indicating operation success
+                - outfit_id: ID of the created outfit
+                - inserted_products: List of product IDs that were inserted
+                - message: Success or error message
+                
         Raises:
-            Exception: If database operation fails
+            Exception: If any database operation fails
         """
         try:
-            # Convert Product to database format
-            product_data = {
-                "id": product.id,
-                "type": product.type,
-                "search_query": product.query,
-                "link": product.link,
-                "title": product.title,
-                "price": str(product.price) if product.price else None,
-                "images": product.images or [],
-                "brand": getattr(product, 'brand', None),  # Some Product objects might not have brand
-                "description": product.description,
-                "created_at": datetime.utcnow().isoformat()
+            # Step 1: Insert products (upsert to handle duplicates)
+            inserted_products = []
+            
+            if products:
+                print(f"📝 Inserting {len(products)} products...\n")
+                
+                for product in products:
+                    try:
+                        # Convert Pydantic model to dict for Supabase
+                        product_data = product.model_dump(exclude_unset=True)
+                        
+                        # Use upsert to handle existing products gracefully
+                        result = self.supabase.table("products").upsert(
+                            product_data, 
+                            on_conflict="id"
+                        ).execute()
+                        
+                        if result.data:
+                            inserted_products.append(product.id)
+                            print(f"✅ Product inserted/updated: {product.title or product.id}")
+                        
+                    except Exception as e:
+                        print(f"❌ Error inserting product {product.id}: {str(e)}")
+                        # Continue with other products even if one fails
+                        continue
+
+            # Step 2: Insert the outfit
+            print("📝 Inserting outfit...\n")
+            outfit_data = outfit.model_dump(exclude_unset=True)
+            
+            outfit_result = self.supabase.table("outfits").insert(outfit_data).execute()
+            
+            if not outfit_result.data:
+                raise Exception("Failed to insert outfit")
+                
+            outfit_id = outfit_result.data[0]["id"]
+            print(f"✅ Outfit inserted with ID: {outfit_id}")
+
+            # Step 3: Create relationships in product_outfit_junction
+            if inserted_products:
+                print(f"Creating {len(inserted_products)} product-outfit relationships...")
+                
+                junction_data = [
+                    {
+                        "outfit_id": outfit_id,
+                        "product_id": product_id,
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                    for product_id in inserted_products
+                ]
+                
+                junction_result = self.supabase.table("product_outfit_junction").insert(
+                    junction_data
+                ).execute()
+                
+                if junction_result.data:
+                    print(f"✅ Created {len(junction_result.data)} product-outfit relationships")
+
+            return {
+                "success": True,
+                "outfit_id": outfit_id,
+                "inserted_products": inserted_products,
+                "message": f"Successfully created outfit with {len(inserted_products)} products"
             }
-            
-            response = self.client.table("products").insert(product_data).execute()
-            
-            if response.data:
-                return DbProduct(**response.data[0])
-            return None
-            
+
         except Exception as e:
-            print(f"Error creating product: {e}")
-            raise Exception(f"Failed to create product: {str(e)}")
-    
-    async def get_product_by_id(self, product_id: str) -> Optional[DbProduct]:
-        """
-        Get a product by its ID.
-        
-        Args:
-            product_id: Unique identifier for the product
-            
-        Returns:
-            DbProduct: Product data or None if not found
-        """
-        try:
-            response = self.client.table("products").select("*").eq("id", product_id).execute()
-            
-            if response.data:
-                return DbProduct(**response.data[0])
-            return None
-            
-        except Exception as e:
-            print(f"Error getting product: {e}")
-            return None
-    
-    async def get_products_by_type(self, product_type: str, limit: int = 50) -> List[DbProduct]:
-        """
-        Get products filtered by type.
-        
-        Args:
-            product_type: Type of products to retrieve
-            limit: Maximum number of products to return
-            
-        Returns:
-            List[DbProduct]: List of products matching the type
-        """
-        try:
-            response = self.client.table("products").select("*").eq("type", product_type).limit(limit).execute()
-            
-            return [DbProduct(**item) for item in response.data]
-            
-        except Exception as e:
-            print(f"Error getting products by type: {e}")
-            return []
-    
-    async def get_products_by_brand(self, brand: str, limit: int = 50) -> List[DbProduct]:
-        """
-        Get products filtered by brand.
-        
-        Args:
-            brand: Brand name to filter by
-            limit: Maximum number of products to return
-            
-        Returns:
-            List[DbProduct]: List of products from the specified brand
-        """
-        try:
-            response = self.client.table("products").select("*").eq("brand", brand).limit(limit).execute()
-            
-            return [DbProduct(**item) for item in response.data]
-            
-        except Exception as e:
-            print(f"Error getting products by brand: {e}")
-            return []
-    
-    async def search_products(self, search_term: str, limit: int = 20) -> List[DbProduct]:
-        """
-        Search products by title or description.
-        
-        Args:
-            search_term: Term to search for in product title/description
-            limit: Maximum number of products to return
-            
-        Returns:
-            List[DbProduct]: List of products matching the search term
-        """
-        try:
-            # Use ilike for case-insensitive search
-            response = self.client.table("products").select("*").or_(
-                f"title.ilike.%{search_term}%,description.ilike.%{search_term}%"
-            ).limit(limit).execute()
-            
-            return [DbProduct(**item) for item in response.data]
-            
-        except Exception as e:
-            print(f"Error searching products: {e}")
-            return []
-    
-    async def update_product(self, product_id: str, updates: Dict[str, Any]) -> Optional[DbProduct]:
-        """
-        Update a product with new data.
-        
-        Args:
-            product_id: ID of the product to update
-            updates: Dictionary of fields to update
-            
-        Returns:
-            DbProduct: Updated product or None if failed
-        """
-        try:
-            response = self.client.table("products").update(updates).eq("id", product_id).execute()
-            
-            if response.data:
-                return DbProduct(**response.data[0])
-            return None
-            
-        except Exception as e:
-            print(f"Error updating product: {e}")
-            return None
-    
-    async def delete_product(self, product_id: str) -> bool:
-        """
-        Delete a product from the database.
-        
-        Args:
-            product_id: ID of the product to delete
-            
-        Returns:
-            bool: True if deleted successfully, False otherwise
-        """
-        try:
-            response = self.client.table("products").delete().eq("id", product_id).execute()
-            return len(response.data) > 0
-            
-        except Exception as e:
-            print(f"Error deleting product: {e}")
-            return False
-    
-    # ============================================================================
-    # OUTFIT OPERATIONS
-    # ============================================================================
-    
-    async def create_outfit(self, outfit: Outfit, user_prompt: Optional[str] = None) -> Optional[DbOutfit]:
-        """
-        Create a new outfit in the database.
-        
-        Args:
-            outfit: Outfit object to create
-            user_prompt: Optional user prompt that generated this outfit
-            
-        Returns:
-            DbOutfit: Created outfit or None if failed
-            
-        Raises:
-            Exception: If database operation fails
-        """
-        try:
-            outfit_data = {
-                "title": outfit.name,
-                "description": outfit.description,
-                "image_url": outfit.image_url,
-                "user_prompt": user_prompt,
-                "created_at": datetime.utcnow().isoformat()
+            error_msg = f"Failed to insert outfit with products: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "outfit_id": None,
+                "inserted_products": [],
+                "message": error_msg
             }
-            
-            response = self.client.table("outfits").insert(outfit_data).execute()
-            
-            if response.data:
-                return DbOutfit(**response.data[0])
-            return None
-            
-        except Exception as e:
-            print(f"Error creating outfit: {e}")
-            raise Exception(f"Failed to create outfit: {str(e)}")
-    
-    async def get_outfit_by_id(self, outfit_id: int) -> Optional[DbOutfit]:
+
+    def get_outfit_with_products(self, outfit_id: int) -> Optional[Dict[str, Any]]:
         """
-        Get an outfit by its ID.
+        Retrieve an outfit along with all its associated products.
         
         Args:
-            outfit_id: Unique identifier for the outfit
+            outfit_id: ID of the outfit to retrieve
             
         Returns:
-            DbOutfit: Outfit data or None if not found
+            Dict containing outfit data and associated products, or None if not found
         """
         try:
-            response = self.client.table("outfits").select("*").eq("id", outfit_id).execute()
+            # Get outfit data
+            outfit_result = self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
             
-            if response.data:
-                return DbOutfit(**response.data[0])
-            return None
+            if not outfit_result.data:
+                return None
+                
+            outfit = outfit_result.data[0]
+
+            # Get associated products through junction table
+            products_result = self.supabase.table("product_outfit_junction").select(
+                """
+                products (
+                    id,
+                    title,
+                    description,
+                    type,
+                    brand,
+                    price,
+                    images,
+                    link,
+                    search_query
+                )
+                """
+            ).eq("outfit_id", outfit_id).execute()
             
+            # Extract product data from junction results
+            products = []
+            if products_result.data:
+                products = [item["products"] for item in products_result.data if item["products"]]
+
+            return {
+                "outfit": outfit,
+                "products": products
+            }
+
         except Exception as e:
-            print(f"Error getting outfit: {e}")
+            print(f"Error retrieving outfit {outfit_id}: {str(e)}")
             return None
-    
-    async def get_all_outfits(self, limit: int = 50, offset: int = 0) -> List[DbOutfit]:
+
+    def delete_outfit(self, outfit_id: int) -> Dict[str, Any]:
         """
-        Get all outfits with pagination.
+        Delete an outfit and all its associated relationships.
         
-        Args:
-            limit: Maximum number of outfits to return
-            offset: Number of outfits to skip
-            
-        Returns:
-            List[DbOutfit]: List of outfits
-        """
-        try:
-            response = self.client.table("outfits").select("*").range(offset, offset + limit - 1).order("created_at", desc=True).execute()
-            
-            return [DbOutfit(**item) for item in response.data]
-            
-        except Exception as e:
-            print(f"Error getting outfits: {e}")
-            return []
-    
-    async def search_outfits(self, search_term: str, limit: int = 20) -> List[DbOutfit]:
-        """
-        Search outfits by title, description, or user prompt.
-        
-        Args:
-            search_term: Term to search for
-            limit: Maximum number of outfits to return
-            
-        Returns:
-            List[DbOutfit]: List of outfits matching the search term
-        """
-        try:
-            response = self.client.table("outfits").select("*").or_(
-                f"title.ilike.%{search_term}%,description.ilike.%{search_term}%,user_prompt.ilike.%{search_term}%"
-            ).limit(limit).execute()
-            
-            return [DbOutfit(**item) for item in response.data]
-            
-        except Exception as e:
-            print(f"Error searching outfits: {e}")
-            return []
-    
-    async def update_outfit(self, outfit_id: int, updates: Dict[str, Any]) -> Optional[DbOutfit]:
-        """
-        Update an outfit with new data.
-        
-        Args:
-            outfit_id: ID of the outfit to update
-            updates: Dictionary of fields to update
-            
-        Returns:
-            DbOutfit: Updated outfit or None if failed
-        """
-        try:
-            response = self.client.table("outfits").update(updates).eq("id", outfit_id).execute()
-            
-            if response.data:
-                return DbOutfit(**response.data[0])
-            return None
-            
-        except Exception as e:
-            print(f"Error updating outfit: {e}")
-            return None
-    
-    async def delete_outfit(self, outfit_id: int) -> bool:
-        """
-        Delete an outfit from the database.
+        Note: Products are not deleted as they might be used in other outfits.
+        Only the outfit and its relationships are removed.
         
         Args:
             outfit_id: ID of the outfit to delete
             
         Returns:
-            bool: True if deleted successfully, False otherwise
+            Dict with success status and message
         """
         try:
-            response = self.client.table("outfits").delete().eq("id", outfit_id).execute()
-            return len(response.data) > 0
+            # Delete the outfit (cascade will handle junction table)
+            result = self.supabase.table("outfits").delete().eq("id", outfit_id).execute()
             
+            if result.data:
+                return {
+                    "success": True,
+                    "message": f"Successfully deleted outfit {outfit_id}"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Outfit {outfit_id} not found"
+                }
+
         except Exception as e:
-            print(f"Error deleting outfit: {e}")
-            return False
-    
-    # ============================================================================
-    # PRODUCT-OUTFIT RELATIONSHIP OPERATIONS
-    # ============================================================================
-    
-    async def add_product_to_outfit(self, outfit_id: int, product_id: str) -> Optional[DbProductOutfitJunction]:
+            error_msg = f"Failed to delete outfit {outfit_id}: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "message": error_msg
+            }
+
+    def get_user_liked_outfits(
+        self, 
+        user_id: str, 
+        page: int = 1, 
+        page_size: int = 10
+    ) -> Dict[str, Any]:
         """
-        Add a product to an outfit.
+        Retrieve all outfits that a user has liked with pagination.
         
         Args:
-            outfit_id: ID of the outfit
-            product_id: ID of the product to add
+            user_id: ID of the user whose liked outfits to retrieve
+            page: Page number (starting from 1)
+            page_size: Number of outfits per page
             
         Returns:
-            DbProductOutfitJunction: Created relationship or None if failed
-            
-        Raises:
-            Exception: If database operation fails
+            Dict containing:
+                - outfits: List of liked outfit data with products
+                - total_count: Total number of liked outfits
+                - page: Current page number
+                - page_size: Number of items per page
         """
         try:
-            junction_data = {
+            # Calculate offset for pagination
+            offset = (page - 1) * page_size
+            
+            # Get liked outfits with pagination through junction table
+            likes_result = self.supabase.table("user_outfit_likes").select(
+                """
+                outfit_id,
+                created_at,
+                outfits (
+                    id,
+                    title,
+                    description,
+                    image_url,
+                    user_prompt,
+                    created_at
+                )
+                """
+            ).eq("user_id", user_id).order("created_at", desc=True).range(
+                offset, offset + page_size - 1
+            ).execute()
+            
+            # Get total count for pagination
+            count_result = self.supabase.table("user_outfit_likes").select(
+                "outfit_id", count="exact"
+            ).eq("user_id", user_id).execute()
+            
+            total_count = count_result.count if count_result.count else 0
+            
+            # Process the results to get complete outfit data with products
+            outfits = []
+            for like_record in likes_result.data:
+                if like_record.get("outfits"):
+                    outfit_id = like_record["outfits"]["id"]
+                    
+                    # Get associated products for each outfit
+                    outfit_with_products = self.get_outfit_with_products(outfit_id)
+                    if outfit_with_products:
+                        outfit_data = outfit_with_products["outfit"]
+                        products = outfit_with_products["products"]
+                        
+                        # Add the products to the outfit data
+                        outfit_data["products"] = products
+                        outfits.append(outfit_data)
+            
+            return {
+                "outfits": outfits,
+                "total_count": total_count,
+                "page": page,
+                "page_size": page_size
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to retrieve user liked outfits: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "outfits": [],
+                "total_count": 0,
+                "page": page,
+                "page_size": page_size
+            }
+
+    def like_outfit(self, user_id: str, outfit_id: int) -> Dict[str, Any]:
+        """
+        Like an outfit for a user by managing both likes and dislikes tables.
+        
+        This method performs the following operations:
+        1. Remove any existing dislike for this user/outfit combination
+        2. Add a like entry (using upsert to handle duplicate likes gracefully)
+        
+        Args:
+            user_id: ID of the user liking the outfit
+            outfit_id: ID of the outfit being liked
+            
+        Returns:
+            Dict containing:
+                - success: Boolean indicating operation success
+                - message: Success or error message
+                
+        Raises:
+            Exception: If database operations fail
+        """
+        try:
+            # Step 1: Remove from dislikes table if exists
+            dislike_result = self.supabase.table("user_outfit_dislikes").delete().eq(
+                "user_id", user_id
+            ).eq("outfit_id", outfit_id).execute()
+            
+            if dislike_result.data:
+                print(f"✅ Removed existing dislike for user {user_id}, outfit {outfit_id}")
+            
+            # Step 2: Add to likes table (upsert to handle duplicates)
+            like_data = {
+                "user_id": user_id,
                 "outfit_id": outfit_id,
-                "product_id": product_id,
                 "created_at": datetime.utcnow().isoformat()
             }
             
-            response = self.client.table("product_outfit_junction").insert(junction_data).execute()
+            like_result = self.supabase.table("user_outfit_likes").upsert(
+                like_data,
+                on_conflict="user_id,outfit_id"
+            ).execute()
             
-            if response.data:
-                return DbProductOutfitJunction(**response.data[0])
-            return None
-            
+            if like_result.data:
+                return {
+                    "success": True,
+                    "message": f"Successfully liked outfit {outfit_id}"
+                }
+            else:
+                raise Exception("Failed to insert like record")
+                
         except Exception as e:
-            print(f"Error adding product to outfit: {e}")
-            raise Exception(f"Failed to add product to outfit: {str(e)}")
-    
-    async def remove_product_from_outfit(self, outfit_id: int, product_id: str) -> bool:
+            error_msg = f"Failed to like outfit {outfit_id} for user {user_id}: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "message": error_msg
+            }
+
+    def dislike_outfit(self, user_id: str, outfit_id: int) -> Dict[str, Any]:
         """
-        Remove a product from an outfit.
+        Dislike an outfit for a user by managing both likes and dislikes tables.
+        
+        This method performs the following operations:
+        1. Remove any existing like for this user/outfit combination
+        2. Add a dislike entry (using upsert to handle duplicate dislikes gracefully)
         
         Args:
-            outfit_id: ID of the outfit
-            product_id: ID of the product to remove
+            user_id: ID of the user disliking the outfit
+            outfit_id: ID of the outfit being unliked
             
         Returns:
-            bool: True if removed successfully, False otherwise
+            Dict containing:
+                - success: Boolean indicating operation success
+                - message: Success or error message
+                
+        Raises:
+            Exception: If database operations fail
         """
         try:
-            response = self.client.table("product_outfit_junction").delete().eq(
-                "outfit_id", outfit_id
-            ).eq("product_id", product_id).execute()
-            
-            return len(response.data) > 0
-            
-        except Exception as e:
-            print(f"Error removing product from outfit: {e}")
-            return False
-    
-    async def get_outfit_products(self, outfit_id: int) -> List[DbProduct]:
-        """
-        Get all products associated with an outfit.
-        
-        Args:
-            outfit_id: ID of the outfit
-            
-        Returns:
-            List[DbProduct]: List of products in the outfit
-        """
-        try:
-            # Join query to get products for a specific outfit
-            response = self.client.table("product_outfit_junction").select(
-                "product_id, products(*)"
+            # Step 1: Remove from likes table if exists
+            like_result = self.supabase.table("user_outfit_likes").delete().eq(
+                "user_id", user_id
             ).eq("outfit_id", outfit_id).execute()
             
-            products = []
-            for item in response.data:
-                if item.get("products"):
-                    products.append(DbProduct(**item["products"]))
+            if like_result.data:
+                print(f"✅ Removed existing like for user {user_id}, outfit {outfit_id}")
             
-            return products
-            
-        except Exception as e:
-            print(f"Error getting outfit products: {e}")
-            return []
-    
-    async def get_product_outfits(self, product_id: str) -> List[DbOutfit]:
-        """
-        Get all outfits that contain a specific product.
-        
-        Args:
-            product_id: ID of the product
-            
-        Returns:
-            List[DbOutfit]: List of outfits containing the product
-        """
-        try:
-            # Join query to get outfits for a specific product
-            response = self.client.table("product_outfit_junction").select(
-                "outfit_id, outfits(*)"
-            ).eq("product_id", product_id).execute()
-            
-            outfits = []
-            for item in response.data:
-                if item.get("outfits"):
-                    outfits.append(DbOutfit(**item["outfits"]))
-            
-            return outfits
-            
-        except Exception as e:
-            print(f"Error getting product outfits: {e}")
-            return []
-    
-    # ============================================================================
-    # BULK OPERATIONS
-    # ============================================================================
-    
-    async def create_outfit_with_products(self, outfit: Outfit, products: List[Product], user_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Create an outfit and associate it with products in a single transaction-like operation.
-        
-        Args:
-            outfit: Outfit object to create
-            products: List of products to associate with the outfit
-            user_prompt: Optional user prompt that generated this outfit
-            
-        Returns:
-            Dict containing created outfit and product relationships, or None if failed
-            
-        Raises:
-            Exception: If any part of the operation fails
-        """
-        try:
-            # First, create the outfit
-            db_outfit = await self.create_outfit(outfit, user_prompt)
-            if not db_outfit:
-                raise Exception("Failed to create outfit")
-            
-            # Then, create products that don't exist and collect their IDs
-            product_ids = []
-            created_products = []
-            
-            for product in products:
-                # Check if product already exists
-                existing_product = await self.get_product_by_id(product.id)
-                if existing_product:
-                    product_ids.append(product.id)
-                else:
-                    # Create new product
-                    new_product = await self.create_product(product)
-                    if new_product:
-                        product_ids.append(new_product.id)
-                        created_products.append(new_product)
-                    else:
-                        print(f"Warning: Failed to create product {product.id}")
-            
-            # Finally, create the relationships
-            relationships = []
-            for product_id in product_ids:
-                relationship = await self.add_product_to_outfit(db_outfit.id, product_id)
-                if relationship:
-                    relationships.append(relationship)
-            
-            return {
-                "outfit": db_outfit,
-                "created_products": created_products,
-                "relationships": relationships,
-                "total_products": len(product_ids)
+            # Step 2: Add to dislikes table (upsert to handle duplicates)
+            dislike_data = {
+                "user_id": user_id,
+                "outfit_id": outfit_id,
+                "created_at": datetime.utcnow().isoformat()
             }
             
+            dislike_result = self.supabase.table("user_outfit_dislikes").upsert(
+                dislike_data,
+                on_conflict="user_id,outfit_id"
+            ).execute()
+            
+            if dislike_result.data:
+                return {
+                    "success": True,
+                    "message": f"Successfully unliked outfit {outfit_id}"
+                }
+            else:
+                raise Exception("Failed to insert dislike record")
+                
         except Exception as e:
-            print(f"Error creating outfit with products: {e}")
-            raise Exception(f"Failed to create outfit with products: {str(e)}")
-    
-    async def get_outfit_complete(self, outfit_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get complete outfit information including all associated products.
-        
-        Args:
-            outfit_id: ID of the outfit
-            
-        Returns:
-            Dict containing outfit and its products, or None if not found
-        """
-        try:
-            # Get the outfit
-            outfit = await self.get_outfit_by_id(outfit_id)
-            if not outfit:
-                return None
-            
-            # Get associated products
-            products = await self.get_outfit_products(outfit_id)
-            
+            error_msg = f"Failed to unlike outfit {outfit_id} for user {user_id}: {str(e)}"
+            print(f"❌ {error_msg}")
             return {
-                "outfit": outfit,
-                "products": products,
-                "product_count": len(products)
+                "success": False,
+                "message": error_msg
             }
-            
-        except Exception as e:
-            print(f"Error getting complete outfit: {e}")
-            return None
+
+# Create a singleton instance for use across the application
+db_service = DatabaseService()
+
+def get_database_service() -> DatabaseService:
+    """
+    Dependency function to get the database service instance.
+    Use this in FastAPI route dependencies.
     
-    # ============================================================================
-    # UTILITY METHODS
-    # ============================================================================
-    
-    async def get_database_stats(self) -> Dict[str, int]:
-        """
-        Get basic statistics about the database.
-        
-        Returns:
-            Dict containing counts of outfits, products, and relationships
-        """
-        try:
-            stats = {}
-            
-            # Count outfits
-            outfit_response = self.client.table("outfits").select("id", count="exact").execute()
-            stats["total_outfits"] = outfit_response.count or 0
-            
-            # Count products
-            product_response = self.client.table("products").select("id", count="exact").execute()
-            stats["total_products"] = product_response.count or 0
-            
-            # Count relationships
-            junction_response = self.client.table("product_outfit_junction").select("outfit_id", count="exact").execute()
-            stats["total_relationships"] = junction_response.count or 0
-            
-            return stats
-            
-        except Exception as e:
-            print(f"Error getting database stats: {e}")
-            return {"total_outfits": 0, "total_products": 0, "total_relationships": 0}
+    Returns:
+        DatabaseService: Singleton database service instance
+    """
+    return db_service

@@ -15,7 +15,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     updated_at timestamp with time zone NULL,
     name text NULL,
     gender text NULL,
-    preferred_brands text[] NOT NULL DEFAULT '{}',
+    positive_brands text[] NOT NULL DEFAULT '{}',
+    negative_brands text[] NOT NULL DEFAULT '{}',
+    positive_styles text[] NOT NULL DEFAULT '{}',
+    negative_styles text[] NOT NULL DEFAULT '{}',
+    positive_colors text[] NOT NULL DEFAULT '{}',
+    negative_colors text[] NOT NULL DEFAULT '{}',
     created_at timestamp with time zone NOT NULL DEFAULT now(),
     
     CONSTRAINT profiles_pkey PRIMARY KEY (id),

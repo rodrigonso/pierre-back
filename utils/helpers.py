@@ -14,7 +14,8 @@ class SearchWebResult(BaseModel):
     success: bool
     error_message: str = None
 
-class Product(BaseModel):
+class SearchProduct(BaseModel):
+    id: str
     title: str
     brand: str
     description: str
@@ -24,7 +25,7 @@ class Product(BaseModel):
 
 class SearchProductsResult(BaseModel):
     query: str
-    products: list[Product]
+    products: list[SearchProduct]
     type: str
     success: bool
     error_message: str = None
@@ -78,7 +79,8 @@ def get_product_details(product):
     product_details = product_info.get("product_results", {})
     product_seller = product_info.get("sellers_results", {}).get("online_sellers", [{}])[0]
 
-    return Product(
+    return SearchProduct(
+        id=product.get("product_id", ""),
         title=product_details.get("title", "No title"),
         description=product_details.get("description", "No description"),
         brand=product.get("source", "Unknown brand"),
@@ -87,7 +89,7 @@ def get_product_details(product):
         images=[img.get("link") for img in product_details.get("media", []) if img.get("link")],
     )
 
-def search_products(query: str) -> list[Product]:
+def search_products(query: str) -> list[SearchProduct]:
     """
     Search for a product using in Google Shopping given a query
     """
