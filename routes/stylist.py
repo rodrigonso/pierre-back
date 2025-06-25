@@ -9,12 +9,16 @@ from services.db import get_database_service, DatabaseService, DatabaseOutfit, D
 from utils.models import User
 from utils.auth import get_current_user
 from services.image import get_image_service
+from services.logger import get_logger_service
+from services.auth import get_auth_service
 
 # Create router for stylist endpoints
 router = APIRouter()
 
 # Initialize auth service
-auth_service = AuthService()
+auth_service = get_auth_service()
+logger_service = get_logger_service()
+image_service = get_image_service()
 
 class CreateOutfitResponse(BaseModel):
     user_prompt: str
@@ -66,58 +70,52 @@ def convert_outfit_to_database_models(outfit: Outfit):
     
     return db_outfit, db_products
 
-@router.post("/stylist/create-outfit", response_model=CreateOutfitResponse)
+@router.post("/stylist/outfit", response_model=CreateOutfitResponse)
 async def create_outfit(
     request: CreateOutfitRequest, 
     user: User = Depends(get_current_user),
     db_service: DatabaseService = Depends(get_database_service)
 ):
     try:
-        print("Received request to create outfit with prompt:", request.prompt)
-
-        # User is already retrieved through dependency injection
-        print("User retrieved:", user)
+        logger_service.info(f"Generating outfit for user: {user.id} with prompt: {request.prompt}")
+        logger_service.debug(f"Provided user data: {user.model_dump()}")
 
         # Create stylist service context from user data
-        service = StylistService(user=user, user_prompt=request.prompt)
-        outfit: Outfit = await service.run()
-        
-        print(f"\n✅ Generated outfit concept: {outfit.name}")
+        stylist_service = StylistService(user=user, user_prompt=request.prompt)
+        outfit: Outfit = await stylist_service.run()
 
-        print(f"📝 Generating outfit image: {outfit.name}...")
-        image_service = get_image_service()
+        logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
+
+        logger_service.info(f"Generating outfit image for: {outfit.name}")
         outfit_image = image_service.generate_image(outfit)
-        outfit.image_url = outfit_image 
-        print(f"✅ Generated outfit image: {outfit_image}")
+        outfit.image_url = outfit_image
+        logger_service.success(f"Outfit image generated: {outfit_image}") 
 
         # Convert outfit concept to database models
         db_outfit, db_products = convert_outfit_to_database_models(outfit)
-        print(f"📝 Saving outfit with {len(db_products)} products to database...")
+        logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
 
         # Save to database
         save_result = db_service.insert_outfit_with_products(db_outfit, db_products)
 
-        if save_result["success"]:
-            print(f"✅ Outfit saved successfully with ID: {save_result['outfit_id']}")
-            return CreateOutfitResponse(
-                user_prompt=request.prompt,
-                outfits=[outfit],
-                success=True
+        if save_result['success'] is False:
+            logger_service.error(f"Failed to save outfit '{db_outfit.title}' to database: {save_result['error']}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save outfit: {save_result['error']}"
             )
-        else:
-            # Log the database error but still return the outfit concept
-            print(f"⚠️ Failed to save outfit to database: {save_result['message']}")
-            print("Returning outfit concept without database persistence")
-            return CreateOutfitResponse(
-                user_prompt=request.prompt,
-                outfits=[outfit],
-                success=True
-            )
+
+        logger_service.success(f"Outfit '{db_outfit.title}' saved to database with ID: {save_result['outfit_id']}")
+        return CreateOutfitResponse(
+            user_prompt=request.prompt,
+            outfits=[outfit],
+            success=True
+        )
 
     except HTTPException:
         raise
     except Exception as e:
-        print("Error creating outfit:", str(e))
+        logger_service.error(f"Failed to create outfit: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create outfit: {str(e)}"

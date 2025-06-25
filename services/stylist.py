@@ -6,7 +6,9 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
 from utils.helpers import SearchProduct, search_products
-import textwrap
+from services.logger import get_logger_service
+
+logger_service = get_logger_service()
 
 @dataclass
 class AnalystResult:
@@ -153,7 +155,7 @@ class StylistService:
                     products = future.result()
                     results[item] = products
                 except Exception as exc:
-                    print(f'Item generated an exception:\n{item.to_str()}\n Exception: {exc}\n')
+                    logger_service.error(f'Item {item.search_query} generated an exception: {exc}')
                     results[item] = []  # Add empty list for failed searches
 
         return results
@@ -335,7 +337,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 shopping_eval_tasks = []
                 for item in outfit_concept.items:
                     products = item_to_products[item]
-                    print(f"Evaluating item: {item.search_query} against {len(products)} products")
+                    logger_service.debug(f"Evaluating products for item {item.search_query}: {[p.title for p in products]}")
 
                     # Create input that includes both item and products
                     shopper_input = f"""
@@ -378,7 +380,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                     )
 
                     updated_items.append(updated_item)
-                    print(f"Chose product: {updated_item.product.title if updated_item.product else 'No products found'}")
+                    logger_service.debug(f"Evaluator chose product: {updated_item.product.title if updated_item.product else 'No matching products found'} for item {item.search_query}")
                 
                 # Update the outfit concept with the new items
                 outfit_concept = OutfitConcept(
@@ -406,6 +408,3 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 break # skip evaluation for now, we can add it later
 
         return self._convert_outfit_concept_to_outfit(outfit_concept)
-
-
-

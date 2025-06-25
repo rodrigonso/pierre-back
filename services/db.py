@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 import uuid
 from datetime import datetime
+from services.logger import get_logger_service
 
 # Load environment variables
 load_dotenv()
@@ -18,6 +19,8 @@ if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
 
 # Create Supabase service client (with elevated permissions)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+logger_service = get_logger_service()
 
 
 class DatabaseProduct(BaseModel):
@@ -111,7 +114,7 @@ class DatabaseService:
             inserted_products = []
             
             if products:
-                print(f"📝 Inserting {len(products)} products...\n")
+                logger_service.info(f"Inserting {len(products)} products for outfit: {outfit.title or 'Unknown'}")
                 
                 for product in products:
                     try:
@@ -126,15 +129,15 @@ class DatabaseService:
                         
                         if result.data:
                             inserted_products.append(product.id)
-                            print(f"✅ Product inserted/updated: {product.title or product.id}")
+                            logger_service.success(f"Product {product.id} inserted/updated successfully")
                         
                     except Exception as e:
-                        print(f"❌ Error inserting product {product.id}: {str(e)}")
+                        logger_service.error(f"Failed to insert product {product.id}: {str(e)}")
                         # Continue with other products even if one fails
                         continue
 
             # Step 2: Insert the outfit
-            print("📝 Inserting outfit...\n")
+            logger_service.info(f"Inserting outfit: {outfit.title or 'Unknown'}")
             outfit_data = outfit.model_dump(exclude_unset=True)
             
             outfit_result = self.supabase.table("outfits").insert(outfit_data).execute()
@@ -143,11 +146,11 @@ class DatabaseService:
                 raise Exception("Failed to insert outfit")
                 
             outfit_id = outfit_result.data[0]["id"]
-            print(f"✅ Outfit inserted with ID: {outfit_id}")
+            logger_service.success(f"Outfit {outfit_id} inserted successfully")
 
             # Step 3: Create relationships in product_outfit_junction
             if inserted_products:
-                print(f"Creating {len(inserted_products)} product-outfit relationships...")
+                logger_service.info(f"Creating product-outfit relationships for outfit {outfit_id}")
                 
                 junction_data = [
                     {
@@ -163,7 +166,7 @@ class DatabaseService:
                 ).execute()
                 
                 if junction_result.data:
-                    print(f"✅ Created {len(junction_result.data)} product-outfit relationships")
+                    logger_service.success(f"Successfully created relationships for outfit {outfit_id}")
 
             return {
                 "success": True,
@@ -174,7 +177,7 @@ class DatabaseService:
 
         except Exception as e:
             error_msg = f"Failed to insert outfit with products: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger_service.error(error_msg)
             return {
                 "success": False,
                 "outfit_id": None,
@@ -229,7 +232,7 @@ class DatabaseService:
             }
 
         except Exception as e:
-            print(f"Error retrieving outfit {outfit_id}: {str(e)}")
+            logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
     def delete_outfit(self, outfit_id: int) -> Dict[str, Any]:
@@ -262,7 +265,7 @@ class DatabaseService:
 
         except Exception as e:
             error_msg = f"Failed to delete outfit {outfit_id}: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger_service.error(error_msg)
             return {
                 "success": False,
                 "message": error_msg
@@ -343,7 +346,7 @@ class DatabaseService:
             
         except Exception as e:
             error_msg = f"Failed to retrieve user liked outfits: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger_service.error(error_msg)
             return {
                 "outfits": [],
                 "total_count": 0,
@@ -378,7 +381,7 @@ class DatabaseService:
             ).eq("outfit_id", outfit_id).execute()
             
             if dislike_result.data:
-                print(f"✅ Removed existing dislike for user {user_id}, outfit {outfit_id}")
+                logger_service.info(f"Removed existing dislike for user {user_id}, outfit {outfit_id}")
             
             # Step 2: Add to likes table (upsert to handle duplicates)
             like_data = {
@@ -402,7 +405,7 @@ class DatabaseService:
                 
         except Exception as e:
             error_msg = f"Failed to like outfit {outfit_id} for user {user_id}: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger_service.error(error_msg)
             return {
                 "success": False,
                 "message": error_msg
@@ -435,7 +438,7 @@ class DatabaseService:
             ).eq("outfit_id", outfit_id).execute()
             
             if like_result.data:
-                print(f"✅ Removed existing like for user {user_id}, outfit {outfit_id}")
+                logger_service.info(f"Removed existing like for user {user_id}, outfit {outfit_id}")
             
             # Step 2: Add to dislikes table (upsert to handle duplicates)
             dislike_data = {
@@ -459,7 +462,7 @@ class DatabaseService:
                 
         except Exception as e:
             error_msg = f"Failed to unlike outfit {outfit_id} for user {user_id}: {str(e)}"
-            print(f"❌ {error_msg}")
+            logger_service.error(error_msg)
             return {
                 "success": False,
                 "message": error_msg
@@ -475,7 +478,7 @@ class DatabaseService:
         """
         # Upload the file to the specified bucket
         response = self.supabase.storage.from_('generated-images').upload(file_name, data)
-        print(response)
+        logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
 
         # Generate the public URL for the uploaded file
         public_url = self.supabase.storage.from_('generated-images').get_public_url(file_name)

@@ -5,11 +5,14 @@ from google.genai import types
 import requests
 from services.stylist import Outfit
 from services.db import get_database_service
+from services.logger import get_logger_service
+
+logger_service = get_logger_service()
+database_service = get_database_service()
 
 class ImageService:
     def __init__(self):
         self.client = genai.Client()
-        self.db_service = get_database_service()
 
     def _save_image(self, data: bytes, name: str) -> str:
         path = f"images/{name}"
@@ -48,10 +51,12 @@ class ImageService:
         for product in products:
 
             if not product.images:
+                logger_service.error(f"Product {product} does not have images.")
                 raise ValueError(f"Product {product} does not have an image URL.")
 
             # Skip unsupported product types
             if product.type not in ["top", "bottom", "dress", "outerwear", "shoes"]:
+                logger_service.warning(f"Skipping unsupported product type: {product.type}")
                 continue
 
             image_data = self._dowload_image(product.images[0])
@@ -83,8 +88,8 @@ class ImageService:
 
                 file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
                 binary_data = candidate.content.parts[0].inline_data.data
-                generated_image_url = self.db_service.upload_image(file_name, binary_data)
-                print(f"Generated image URL: {generated_image_url}")
+                generated_image_url = database_service.upload_image(file_name, binary_data)
+                logger_service.success(f"Generated image URL: {generated_image_url}")
 
                 break
 

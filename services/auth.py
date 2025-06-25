@@ -8,6 +8,9 @@ from datetime import datetime
 from pydantic import BaseModel
 from typing import List
 from utils.models import User
+from services.logger import get_logger_service
+
+logger_service = get_logger_service()
 
 # Load environment variables
 load_dotenv()
@@ -50,7 +53,6 @@ class AuthService:
         """Initialize the AuthService with Supabase clients and configuration."""
         self.supabase = supabase_service
         self.anon_client = supabase_anon
-        self.guest_request_limit = 3  # Maximum requests per guest
 
     async def get_current_user(self, token: str) -> Optional[User]:
         """
@@ -68,39 +70,46 @@ class AuthService:
         try:
 
             print(f"Verifying token: {token}")
+            logger_service.info(f"Verifying token...")
+
             # Verify the JWT token with Supabase
             response = self.supabase.auth.get_user(token)
             
             if not response.user:
                 return None
             
+            logger_service.success(f"Token verified successfully for user: {response.user.id}")
             auth_user = response.user
             
+            logger_service.info(f"Checking user profile for user ID: {auth_user.id}")
             # Get user profile from the profiles table
             profile_response = self.supabase.table("profiles").select("*").eq("id", auth_user.id).execute()
             
             if not profile_response.data:
                 raise Exception("User profile not found in database")
             
-            if profile_response.data:
-                profile = profile_response.data[0]
-                  # Map database fields to User model
-                return User(
-                    id=profile["id"],
-                    name=profile.get("name"),
-                    gender=profile.get("gender"),
-                    positive_brands=profile.get("positive_brands", []),
-                    negative_brands=profile.get("negative_brands", []),
-                    positive_styles=profile.get("positive_styles", []),
-                    negative_styles=profile.get("negative_styles", []),
-                    positive_colors=profile.get("positive_colors", []),
-                    negative_colors=profile.get("negative_colors", [])
-                )
+            logger_service.success(f"User profile found for user ID: {auth_user.id}")
+
+            if not profile_response.data:
+                logger_service.warning(f"No profile data found for user ID: {auth_user.id}")
+                return None
             
-            return None
+            profile = profile_response.data[0]
+                # Map database fields to User model
+            return User(
+                id=profile["id"],
+                name=profile.get("name"),
+                gender=profile.get("gender"),
+                positive_brands=profile.get("positive_brands", []),
+                negative_brands=profile.get("negative_brands", []),
+                positive_styles=profile.get("positive_styles", []),
+                negative_styles=profile.get("negative_styles", []),
+                positive_colors=profile.get("positive_colors", []),
+                negative_colors=profile.get("negative_colors", [])
+            )
             
         except Exception as e:
-            print(f"Error getting current user: {e}")
+            logger_service.error(f"Failed to get current user: {str(e)}")
             raise Exception(f"Failed to authenticate user: {str(e)}")
 
     def verify_token(self, token: str) -> Dict[str, Any]:
@@ -163,3 +172,13 @@ class AuthService:
         except Exception as e:
             print(f"Error getting user by ID: {e}")
             return None
+
+auth_service = AuthService()
+def get_auth_service() -> AuthService:
+    """
+    Dependency to get the authentication service instance.
+    
+    Returns:
+        AuthService: Instance of the authentication service
+    """
+    return auth_service
