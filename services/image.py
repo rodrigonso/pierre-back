@@ -64,7 +64,7 @@ class ImageService:
         for product in outfit.products:
 
             if not product.images:
-                raise ValueError(f"Product {product.name} does not have an image URL.")
+                raise ValueError(f"Product {product} does not have an image URL.")
 
             # Skip unsupported product types
             if product.type not in ["top", "bottom", "dress", "outerwear", "shoes"]:
