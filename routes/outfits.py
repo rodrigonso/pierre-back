@@ -41,7 +41,11 @@ class OutfitResponse(BaseModel):
     created_at: datetime
     products: Optional[List[Dict[str, Any]]] = []
 
-class OutfitListResponse(BaseModel):
+class LikedOutfitResponse(OutfitResponse):
+    """Response model for liked outfits"""
+    is_liked: bool = True  # Indicates if the outfit is liked by the user
+
+class ListOutfitResponse(BaseModel):
     """Response model for outfit listings"""
     outfits: List[OutfitResponse]
     total_count: int
@@ -49,30 +53,30 @@ class OutfitListResponse(BaseModel):
     page_size: int
     success: bool = True
 
-class OutfitOperationResponse(BaseModel):
-    """Response model for outfit operations (create, update, delete)"""
-    success: bool
-    message: str
-    outfit_id: Optional[int] = None
-
-class OutfitLikeResponse(BaseModel):
+class LikeOutfitResponse(BaseModel):
     """Response model for outfit like/unlike operations"""
     success: bool
     message: str
     outfit_id: int
     is_liked: bool
 
+class OperationOutfitResponse(BaseModel):
+    """Response model for outfit operations (create, update, delete)"""
+    success: bool
+    message: str
+    outfit_id: Optional[int] = None
+
 # ============================================================================
 # CRUD ENDPOINTS
 # ============================================================================
 
-@router.get("/outfits/", response_model=OutfitListResponse)
-async def get_all_outfits(
+@router.get("/outfits/", response_model=ListOutfitResponse)
+async def get_outfits(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
     db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitListResponse:
+) -> ListOutfitResponse:
     """
     Get all outfits with pagination.
     
@@ -83,7 +87,7 @@ async def get_all_outfits(
         db_service: Database service dependency
         
     Returns:
-        OutfitListResponse: List of outfits with pagination info
+        ListOutfitResponse: List of outfits with pagination info
         
     Raises:
         HTTPException: If database operation fails
@@ -121,7 +125,7 @@ async def get_all_outfits(
                 products=products
             ))
         
-        return OutfitListResponse(
+        return ListOutfitResponse(
             outfits=outfit_responses,
             total_count=total_count,
             page=page,
@@ -134,13 +138,13 @@ async def get_all_outfits(
             detail=f"Failed to retrieve outfits: {str(e)}"
         )
 
-@router.get("/outfits/liked", response_model=OutfitListResponse)
+@router.get("/outfits/liked", response_model=ListOutfitResponse)
 async def get_user_liked_outfits(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
     current_user: User = Depends(get_current_user),
     db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitListResponse:
+) -> ListOutfitResponse:
     """
     Get all outfits that the current user has liked with pagination.
     
@@ -151,7 +155,7 @@ async def get_user_liked_outfits(
         db_service: Database service dependency
         
     Returns:
-        OutfitListResponse: List of user's liked outfits with pagination info
+        ListOutfitResponse: List of user's liked outfits with pagination info
         
     Raises:
         HTTPException: If database operation fails
@@ -170,17 +174,18 @@ async def get_user_liked_outfits(
             # Products are already included in the outfit data
             products = outfit_data.get("products", [])
             
-            outfit_responses.append(OutfitResponse(
+            outfit_responses.append(LikedOutfitResponse(
                 id=outfit_data["id"],
                 title=outfit_data.get("title"),
                 description=outfit_data.get("description"),
                 image_url=outfit_data.get("image_url"),
                 user_prompt=outfit_data.get("user_prompt"),
                 created_at=outfit_data["created_at"],
-                products=products
+                products=products,
+                is_liked=True
             ))
         
-        return OutfitListResponse(
+        return ListOutfitResponse(
             outfits=outfit_responses,
             total_count=result["total_count"],
             page=result["page"],
@@ -196,7 +201,7 @@ async def get_user_liked_outfits(
 @router.get("/outfits/{outfit_id}", response_model=OutfitResponse)
 async def get_outfit_by_id(
     outfit_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
     db_service: DatabaseService = Depends(get_database_service)
 ) -> OutfitResponse:
     """
@@ -243,12 +248,12 @@ async def get_outfit_by_id(
             detail=f"Failed to retrieve outfit: {str(e)}"
         )
 
-@router.post("/outfits/", response_model=OutfitOperationResponse)
+@router.post("/outfits/", response_model=OperationOutfitResponse)
 async def create_outfit(
     request: OutfitCreateRequest,
     current_user: User = Depends(get_current_user),
     db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitOperationResponse:
+) -> OperationOutfitResponse:
     """
     Create a new outfit.
     
@@ -258,7 +263,7 @@ async def create_outfit(
         db_service: Database service dependency
         
     Returns:
-        OutfitOperationResponse: Success status and outfit ID
+        OperationOutfitResponse: Success status and outfit ID
         
     Raises:
         HTTPException: If creation fails
@@ -299,7 +304,7 @@ async def create_outfit(
         result = db_service.insert_outfit_with_products(outfit, products)
         
         if result["success"]:
-            return OutfitOperationResponse(
+            return OperationOutfitResponse(
                 success=True,
                 message=result["message"],
                 outfit_id=result["outfit_id"]
@@ -318,148 +323,16 @@ async def create_outfit(
             detail=f"Failed to create outfit: {str(e)}"
         )
 
-@router.put("/outfits/{outfit_id}", response_model=OutfitOperationResponse)
-async def update_outfit(
-    outfit_id: int,
-    request: OutfitUpdateRequest,
-    current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitOperationResponse:
-    """
-    Update an existing outfit.
-    
-    Args:
-        outfit_id: ID of the outfit to update
-        request: Outfit update data
-        current_user: Authenticated user
-        db_service: Database service dependency
-        
-    Returns:
-        OutfitOperationResponse: Success status and message
-        
-    Raises:
-        HTTPException: If outfit not found or update fails
-    """
-    try:
-        # Check if outfit exists
-        outfit_check = db_service.supabase.table("outfits").select(
-            "id"
-        ).eq("id", outfit_id).execute()
-        
-        if not outfit_check.data:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Outfit with ID {outfit_id} not found"
-            )
-        
-        # Prepare update data (only include non-None values)
-        update_data = {}
-        if request.title is not None:
-            update_data["title"] = request.title
-        if request.description is not None:
-            update_data["description"] = request.description
-        if request.image_url is not None:
-            update_data["image_url"] = request.image_url
-        if request.user_prompt is not None:
-            update_data["user_prompt"] = request.user_prompt
-        
-        if not update_data:
-            return OutfitOperationResponse(
-                success=True,
-                message="No changes to update",
-                outfit_id=outfit_id
-            )
-        
-        # Add updated timestamp
-        update_data["updated_at"] = datetime.utcnow().isoformat()
-        
-        # Perform update
-        result = db_service.supabase.table("outfits").update(
-            update_data
-        ).eq("id", outfit_id).execute()
-        
-        if result.data:
-            return OutfitOperationResponse(
-                success=True,
-                message=f"Successfully updated outfit {outfit_id}",
-                outfit_id=outfit_id
-            )
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to update outfit"
-            )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update outfit: {str(e)}"
-        )
-
-@router.delete("/outfits/{outfit_id}", response_model=OutfitOperationResponse)
-async def delete_outfit(
-    outfit_id: int,
-    current_user: User = Depends(get_current_user),
-    db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitOperationResponse:
-    """
-    Delete an outfit and all its associated relationships.
-    
-    Note: This will not delete the associated products as they might be used in other outfits.
-    Only the outfit and its relationships in the product_outfit_junction table are removed.
-    
-    Args:
-        outfit_id: ID of the outfit to delete
-        current_user: Authenticated user
-        db_service: Database service dependency
-        
-    Returns:
-        OutfitOperationResponse: Success status and message
-        
-    Raises:
-        HTTPException: If outfit not found or deletion fails
-    """
-    try:
-        result = db_service.delete_outfit(outfit_id)
-        
-        if result["success"]:
-            return OutfitOperationResponse(
-                success=True,
-                message=result["message"],
-                outfit_id=outfit_id
-            )
-        else:
-            if "not found" in result["message"]:
-                raise HTTPException(
-                    status_code=404,
-                    detail=result["message"]
-                )
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=result["message"]
-                )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete outfit: {str(e)}"
-        )
-
 # ============================================================================
 # LIKE/DISLIKE ENDPOINTS
 # ============================================================================
 
-@router.post("/outfits/{outfit_id}/like", response_model=OutfitLikeResponse)
+@router.post("/outfits/{outfit_id}/like", response_model=LikeOutfitResponse)
 async def like_outfit(
     outfit_id: int,
     current_user: User = Depends(get_current_user),
     db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitLikeResponse:
+) -> LikeOutfitResponse:
     """
     Like an outfit for the current user.
     
@@ -472,7 +345,7 @@ async def like_outfit(
         db_service: Database service dependency
         
     Returns:
-        OutfitLikeResponse: Success status with like information
+        LikeOutfitResponse: Success status with like information
         
     Raises:
         HTTPException: If outfit not found or like operation fails
@@ -482,7 +355,7 @@ async def like_outfit(
         result = db_service.like_outfit(user_id=current_user.id, outfit_id=outfit_id)
         
         if result["success"]:
-            return OutfitLikeResponse(
+            return LikeOutfitResponse(
                 success=True,
                 message=result["message"],
                 outfit_id=outfit_id,
@@ -502,12 +375,12 @@ async def like_outfit(
             detail=f"Failed to like outfit: {str(e)}"
         )
 
-@router.post("/outfits/{outfit_id}/dislike", response_model=OutfitLikeResponse)
+@router.post("/outfits/{outfit_id}/dislike", response_model=LikeOutfitResponse)
 async def dislike_outfit(
     outfit_id: int,
     current_user: User = Depends(get_current_user),
     db_service: DatabaseService = Depends(get_database_service)
-) -> OutfitLikeResponse:
+) -> LikeOutfitResponse:
     """
     Unlike (remove like from) an outfit for the current user.
     
@@ -520,7 +393,7 @@ async def dislike_outfit(
         db_service: Database service dependency
         
     Returns:
-        OutfitLikeResponse: Success status with unlike information
+        LikeOutfitResponse: Success status with unlike information
         
     Raises:
         HTTPException: If outfit not found or unlike operation fails
@@ -530,7 +403,7 @@ async def dislike_outfit(
         result = db_service.dislike_outfit(user_id=current_user.id, outfit_id=outfit_id)
         
         if result["success"]:
-            return OutfitLikeResponse(
+            return LikeOutfitResponse(
                 success=True,
                 message=result["message"],
                 outfit_id=outfit_id,

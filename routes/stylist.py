@@ -4,7 +4,6 @@ from typing import List, Optional
 from pydantic import BaseModel
 import uuid
 from services.stylist import StylistService, Outfit
-from services.auth import AuthService
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
 from utils.models import User
 from utils.auth import get_current_user
@@ -29,7 +28,7 @@ class CreateOutfitRequest(BaseModel):
     prompt: str
 
 
-def convert_outfit_to_database_models(outfit: Outfit):
+def _convert_outfit_to_database_models(outfit: Outfit):
     """
     Convert an OutfitConcept to DatabaseOutfit and DatabaseProduct models.
     
@@ -92,7 +91,7 @@ async def create_outfit(
         logger_service.success(f"Outfit image generated: {outfit_image}") 
 
         # Convert outfit concept to database models
-        db_outfit, db_products = convert_outfit_to_database_models(outfit)
+        db_outfit, db_products = _convert_outfit_to_database_models(outfit)
         logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
 
         # Save to database
