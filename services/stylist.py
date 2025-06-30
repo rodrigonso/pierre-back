@@ -28,6 +28,7 @@ class OutfitItem:
     search_query: str
     color: str
     type: Literal["top", "bottom", "dress", "outerwear", "shoes", "accessories", "jewelry"]
+    style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty"]
     reasoning: str
     points: int = 0
     product: Optional[SearchProduct] = None
@@ -46,6 +47,7 @@ class OutfitConcept:
     description: str
     items: list[OutfitItem]
     points: int
+    style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty"]
 
     def to_str(self) -> str:
         """Convert the outfit concept to a markdown formatted string."""
@@ -106,15 +108,17 @@ class Product(BaseModel):
     search_query: str
     points: int
     color: str
+    style: str
 
 class Outfit(BaseModel):
-    id: Optional[str]
+    id: Optional[int]
     name: str
     description: str
     products: list[Product]
     image_url: Optional[str] = None
     user_prompt: str
     points: int
+    style: str
 
 class StylistService:
     def __init__(self, user: User, user_prompt: str):
@@ -174,6 +178,7 @@ class StylistService:
                     type=item.type,
                     search_query=item.search_query,
                     color=item.color,
+                    style=item.style,
                     points=item.points,
                     title=item.product.title,
                     brand=item.product.brand,
@@ -191,7 +196,8 @@ class StylistService:
             description=outfit_concept.description,
             products=pydantic_products,
             image_url=None,  # No image URL available in current outfit concept
-            user_prompt=self.context.user_prompt
+            user_prompt=self.context.user_prompt,
+            style=outfit_concept.style,
         )
 
 # ============= Agents ============
@@ -373,6 +379,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                     updated_item = OutfitItem(
                         search_query=item.search_query,
                         color=item.color.lower(),
+                        style=item.style.lower(),
                         type=item.type.lower(),
                         product=matching_product,
                         points=item.points,
@@ -386,6 +393,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 outfit_concept = OutfitConcept(
                     name=outfit_concept.name,
                     description=outfit_concept.description,
+                    style=outfit_concept.style,
                     items=updated_items,
                     points=sum(item.points for item in updated_items),
                 )

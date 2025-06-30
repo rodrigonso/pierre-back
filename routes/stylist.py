@@ -43,29 +43,31 @@ def _convert_outfit_to_database_models(outfit: Outfit):
     """
     # Create the database outfit model
     db_outfit = DatabaseOutfit(
-        title=outfit.name,
+        name=outfit.name,
         description=outfit.description,
-        image_url=outfit.image_url,  # TODO: No image URL available in current outfit concept
+        image_url=outfit.image_url,
         user_prompt=outfit.user_prompt,
-        points=outfit.points
+        points=outfit.points,
+        style=outfit.style,
     )
     
     # Create database product models from outfit items
     db_products = []
     for product in outfit.products:
-        if product:  # Only include items that have associated products            
+        if product:  # Only include items that have associated products
             db_product = DatabaseProduct(
                 id=product.id,
                 type=product.type,
                 search_query=product.search_query,
                 points=product.points,
                 color=product.color,
-                link=getattr(product, 'link', None),
-                title=getattr(product, 'title', None),
-                price=getattr(product, 'price', 0.0),
-                images=getattr(product, 'images', []),
-                brand=getattr(product, 'brand', None),
-                description=getattr(product, 'description', None)
+                link=product.link,
+                title=product.title,
+                price=product.price,
+                images=product.images,
+                brand=product.brand,
+                description=product.description,
+                style=product.style
             )
             db_products.append(db_product)
     
@@ -97,15 +99,15 @@ def _save_outfit_to_db(outfit: Outfit) -> str:
         Dictionary with success status and outfit ID
     """
     db_outfit, db_products = _convert_outfit_to_database_models(outfit)
-    logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
+    logger_service.info(f"Saving outfit '{db_outfit.name}' with {len(db_products)} products to database")
     
     save_result = database_service.insert_outfit_with_products(db_outfit, db_products)
     
     if not save_result['success']:
-        logger_service.error(f"Failed to save outfit '{db_outfit.title}' to database: {save_result['error']}")
+        logger_service.error(f"Failed to save outfit '{db_outfit.name}' to database: {save_result['error']}")
         return {'success': False, 'error': save_result['error']}
     
-    logger_service.success(f"Outfit '{db_outfit.title}' saved to database with ID: {save_result['outfit_id']}")
+    logger_service.success(f"Outfit '{db_outfit.name}' saved to database with ID: {save_result['outfit_id']}")
     return save_result['outfit_id']
 
 @router.post("/stylist/outfit", response_model=CreateOutfitResponse)
@@ -126,7 +128,7 @@ async def create_outfit(
 
         # Convert outfit concept to database models
         db_outfit, db_products = _convert_outfit_to_database_models(outfit)
-        logger_service.info(f"Saving outfit '{db_outfit.title}' with {len(db_products)} products to database")
+        logger_service.info(f"Saving outfit '{db_outfit.name}' with {len(db_products)} products to database")
 
         # Save to database
         outfit_id = _save_outfit_to_db(outfit)

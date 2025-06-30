@@ -72,27 +72,49 @@ class ImageService:
         images, temp_images = self._process_products(outfit.products)
 
         user_parts = [types.Part.from_uri(file_uri=image.uri, mime_type=image.mime_type) for image in images]
-        user_parts.append(types.Part.from_text(text="""Generate an image of a female model on a neutral background wearing the garments from the images provided."""))
+        user_parts.append(types.Part.from_text(text="""Generate an image of a female model on a neutral background wearing the garments from the images provided. Do NOT return any text -- you should only return the image."""))
 
-        contents = [types.Content(role="user", parts=user_parts)]
-        response: types.GenerateContentResponse  = self._call_llm(contents)
+        try:
+            contents = [types.Content(role="user", parts=user_parts)]
+            response: types.GenerateContentResponse = self._call_llm(contents)
 
-        generated_image_url = None
-        for candidate in response.candidates:
-            if candidate.content.parts[0].inline_data:
+            generated_image_url = None
+            for candidate in response.candidates:
+                if candidate.content.parts[0].inline_data:
 
-                file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
-                binary_data = candidate.content.parts[0].inline_data.data
-                generated_image_url = database_service.upload_image(file_name, binary_data)
+                    file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
+                    binary_data = candidate.content.parts[0].inline_data.data
+                    generated_image_url = database_service.upload_image(file_name, binary_data)
 
-                break
-            else:
-                logger_service.warning("No inline data found in the response candidate.")
+                    break
+                else:
+                    logger_service.error("No inline data found in the response candidate.")
+                    logger_service.debug(f"Candidate content: {candidate.content}")
+                    
+                    # Write the response to a text file for debugging
+                    error_file_name = f"error_response_{uuid.uuid4().hex}.txt"
+                    error_file_path = f"images/{error_file_name}"
+                    
+                    try:
+                        with open(error_file_path, "w", encoding="utf-8") as error_file:
+                            error_file.write(f"Error: No inline data found in response candidate\n")
+                            error_file.write(f"Outfit name: {outfit.name}\n")
+                            error_file.write(f"Timestamp: {uuid.uuid4().hex}\n")
+                            error_file.write(f"Full response: {response}\n")
+                            error_file.write(f"Candidate content: {candidate.content}\n")
+                        
+                        logger_service.info(f"Error response written to: {error_file_path}")
+                    except Exception as write_error:
+                        logger_service.error(f"Failed to write error response to file: {str(write_error)}")
 
-                # Delete all files from the images dir
-        for file_path in temp_images:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+        except Exception as e:
+            logger_service.error(f"Error generating image: {str(e)}")
+
+        finally:
+            # Delete all files from the images dir
+            for file_path in temp_images:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
 
         return generated_image_url
 
