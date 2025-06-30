@@ -29,7 +29,7 @@ class DatabasePaginatedResponse(BaseModel, Generic[T]):
     total_count: int
     page: int
     page_size: int
-    success: bool = True
+    success: bool
     data: List[T]
 
 class DatabaseSimilarityResponse(BaseModel, Generic[T]):
@@ -37,6 +37,11 @@ class DatabaseSimilarityResponse(BaseModel, Generic[T]):
     message: str
     data: List[T]
     target: T
+
+class DatabaseLikeResponse(BaseModel):
+    success: bool
+    message: str
+    is_liked: bool
 
 class DatabaseProduct(BaseModel):
     id: str
@@ -53,13 +58,14 @@ class DatabaseProduct(BaseModel):
     style: str
 
 class DatabaseOutfit(BaseModel):
-    id: int
+    id: Optional[int] = None
     name: str
     description: str
     image_url: Optional[str] = None
     user_prompt: str
     style: str
     points: int
+    is_liked: Optional[bool] = None
     products: Optional[List[DatabaseProduct]] = None
 
 class DatabaseService:
@@ -108,7 +114,7 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
-    def get_outfit_with_products(self, outfit_id: int) -> Optional[DatabaseOutfit]:
+    def get_outfit_with_products(self, outfit_id: int, user_id: str = None, include_likes: bool = False) -> Optional[DatabaseOutfit]:
         """
         Retrieve an outfit along with all its associated products.
         
@@ -119,13 +125,23 @@ class DatabaseService:
             Dict containing outfit data and associated products, or None if not found
         """
         try:
-            # Get outfit data
-            outfit_result = self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
-            
+            if include_likes:
+                outfit_result = self.supabase.table("outfits").select(
+                    "*, user_outfit_likes!left(outfit_id)"
+                ).eq("id", outfit_id).execute()
+            else:
+                outfit_result = self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
+
             if not outfit_result.data:
                 return None
+
             outfit = outfit_result.data[0]
             products = self._get_outfit_products(outfit_id)
+
+            if include_likes and user_id:
+                outfit['is_liked'] = len(outfit.get("user_outfit_likes", [])) == 1
+            else:
+                outfit['is_liked'] = None
 
             return DatabaseOutfit(**outfit, products=products)
 
@@ -133,7 +149,7 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
-    def get_outfits(self, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    def get_outfits(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve a paginated list of outfits from the database.
         
@@ -146,7 +162,11 @@ class DatabaseService:
         """
         try:
             offset = (page - 1) * page_size
-            outfits = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
+
+            if include_likes and user_id:
+                outfits = self.supabase.table("outfits").select("*, user_outfit_likes!left(outfit_id)").eq("user_outfit_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+            else:
+                outfits = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
 
             count_result = self.supabase.table("outfits").select("id", count="exact").execute()
             total_count = count_result.count if count_result.count else 0
@@ -155,6 +175,12 @@ class DatabaseService:
             outfit_objects = []
             for outfit_data in outfits.data:
                 try:
+
+                    if include_likes and user_id:
+                        outfit_data['is_liked'] = len(outfit_data.get("user_outfit_likes", [])) == 1
+                    else:
+                        outfit_data['is_liked'] = None
+
                     outfit_obj = DatabaseOutfit(**outfit_data)
                     outfit_objects.append(outfit_obj)
 
@@ -181,7 +207,7 @@ class DatabaseService:
                 success=False
             )
 
-    def get_outfits_with_products(self, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits along with their associated products with pagination.
 
@@ -199,10 +225,15 @@ class DatabaseService:
         try:
             offset = (page - 1) * page_size
             
-            # Get outfits with pagination
-            outfits_result = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
-            
-            if not outfits_result.data:
+            if include_likes and user_id:
+                # Get outfits with pagination and user likes
+                outfits = self.supabase.table("outfits").select(
+                    "*, user_outfit_likes!left(outfit_id)"
+                ).eq("user_outfit_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+            else:
+                outfits = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
+
+            if not outfits.data:
                 return DatabasePaginatedResponse[DatabaseOutfit](
                     data=[],
                     total_count=0,
@@ -217,8 +248,14 @@ class DatabaseService:
             
             # Convert raw outfit data to DatabaseOutfit objects
             outfit_objects: List[DatabaseOutfit] = []
-            for outfit_data in outfits_result.data:
+            for outfit_data in outfits.data:
                 try:
+
+                    if include_likes and user_id:
+                        outfit_data['is_liked'] = len(outfit_data.get("user_outfit_likes", [])) == 1
+                    else:
+                        outfit_data['is_liked'] = None
+
                     outfit_obj = DatabaseOutfit(**outfit_data)
                     outfit_objects.append(outfit_obj)
                 except Exception as e:
@@ -248,27 +285,22 @@ class DatabaseService:
                 success=False
             )
 
-    def get_liked_outfits(
-        self, 
-        user_id: str, 
-        page: int = 1, 
-        page_size: int = 10
-    ) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    def get_liked_outfits(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits that a user has liked with pagination.
-        
+
         Args:
             user_id: ID of the user whose liked outfits to retrieve
             page: Page number (starting from 1)
             page_size: Number of outfits per page
-            
+
         Returns:
             DatabasePaginatedResponse containing DatabaseOutfit objects with pagination applied
         """
         try:
             # Calculate offset for pagination
             offset = (page - 1) * page_size
-            
+
             # Get liked outfits with pagination through junction table
             likes_result = self.supabase.table("user_outfit_likes").select(
                 """
@@ -279,22 +311,24 @@ class DatabaseService:
             ).eq("user_id", user_id).order("created_at", desc=True).range(
                 offset, offset + page_size - 1
             ).execute()
-            
+
             # Get total count for pagination
             count_result = self.supabase.table("user_outfit_likes").select(
                 "outfit_id", count="exact"
             ).eq("user_id", user_id).execute()
-            
+
             total_count = count_result.count if count_result.count else 0
-            
+
             # Convert raw outfit data to DatabaseOutfit objects
             outfit_objects = []
             for like_record in likes_result.data:
                 if like_record.get("outfits"):
                     try:
+
                         outfit_data = like_record["outfits"]
-                        outfit_obj = DatabaseOutfit(**outfit_data)
+                        outfit_obj = DatabaseOutfit(**outfit_data, is_liked=True)
                         outfit_objects.append(outfit_obj)
+
                     except Exception as e:
                         logger_service.error(f"Failed to convert liked outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
                         # Continue processing other outfits instead of failing entirely
@@ -483,11 +517,7 @@ class DatabaseService:
                 success=False
             )
 
-    def insert_outfit_with_products(
-        self, 
-        outfit: DatabaseOutfit, 
-        products: List[DatabaseProduct]
-    ) -> Dict[str, Any]:
+    def insert_outfit_with_products(self, outfit: DatabaseOutfit, products: List[DatabaseProduct]) -> Dict[str, Any]:
         """
         Insert a new outfit along with its products and create the necessary relationships.
         
@@ -581,12 +611,11 @@ class DatabaseService:
             logger_service.error(error_msg)
             return {
                 "success": False,
-                "outfit_id": None,
-                "inserted_products": [],
+                "outfit_id": None,            "inserted_products": [],
                 "message": error_msg
             }
 
-    def like_outfit(self, user_id: str, outfit_id: int) -> Dict[str, Any]:
+    def like_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
         """
         Like an outfit for a user by managing both likes and dislikes tables.
         
@@ -621,29 +650,31 @@ class DatabaseService:
                 "outfit_id": outfit_id,
                 "created_at": datetime.utcnow().isoformat()
             }
-            
+
             like_result = self.supabase.table("user_outfit_likes").upsert(
                 like_data,
                 on_conflict="user_id,outfit_id"
             ).execute()
             
             if like_result.data:
-                return {
-                    "success": True,
-                    "message": f"Successfully liked outfit {outfit_id}"
-                }
+                return DatabaseLikeResponse(
+                    success=True,
+                    message=f"Successfully liked outfit {outfit_id}",
+                    is_liked=True
+                )
             else:
                 raise Exception("Failed to insert like record")
-                
+
         except Exception as e:
             error_msg = f"Failed to like outfit {outfit_id} for user {user_id}: {str(e)}"
             logger_service.error(error_msg)
-            return {
-                "success": False,
-                "message": error_msg
-            }
+            return DatabaseLikeResponse(
+                success=False,
+                message=error_msg,
+                is_liked=False
+            )
 
-    def dislike_outfit(self, user_id: str, outfit_id: int) -> Dict[str, Any]:
+    def dislike_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
         """
         Dislike an outfit for a user by managing both likes and dislikes tables.
         
@@ -678,26 +709,27 @@ class DatabaseService:
                 "outfit_id": outfit_id,
                 "created_at": datetime.utcnow().isoformat()
             }
-            
             dislike_result = self.supabase.table("user_outfit_dislikes").upsert(
                 dislike_data,
                 on_conflict="user_id,outfit_id"
             ).execute()
             
             if dislike_result.data:
-                return {
-                    "success": True,
-                    "message": f"Successfully unliked outfit {outfit_id}"
-                }
+                return DatabaseLikeResponse(
+                    success=True,
+                    message=f"Successfully unliked outfit {outfit_id}",
+                    is_liked=False
+                )
             else:
                 raise Exception("Failed to insert dislike record")
         except Exception as e:
             error_msg = f"Failed to unlike outfit {outfit_id} for user {user_id}: {str(e)}"
             logger_service.error(error_msg)
-            return {
-                "success": False,
-                "message": error_msg
-            }
+            return DatabaseLikeResponse(
+                success=False,
+                message=error_msg,
+                is_liked=False
+            )
 
     def find_similar_outfits(
         self, 
@@ -880,120 +912,6 @@ class DatabaseService:
                 "page_size": page_size
             }
 
-    def like_product(self, user_id: str, product_id: str) -> Dict[str, Any]:
-        """
-        Like a product for a user by managing both likes and dislikes tables.
-        
-        This method performs the following operations:
-        1. Remove any existing dislike for this user/product combination
-        2. Add a like entry (using upsert to handle duplicate likes gracefully)
-        
-        Args:
-            user_id: ID of the user liking the product
-            product_id: ID of the product being liked
-            
-        Returns:
-            Dict containing:
-                - success: Boolean indicating operation success
-                - message: Success or error message
-                
-        Raises:
-            Exception: If database operations fail
-        """
-        try:
-            # Step 1: Remove from dislikes table if exists
-            dislike_result = self.supabase.table("user_product_dislikes").delete().eq(
-                "user_id", user_id
-            ).eq("product_id", product_id).execute()
-            
-            if dislike_result.data:
-                logger_service.info(f"Removed existing dislike for user {user_id}, product {product_id}")
-            
-            # Step 2: Add to likes table (upsert to handle duplicates)
-            like_data = {
-                "user_id": user_id,
-                "product_id": product_id,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            
-            like_result = self.supabase.table("user_product_likes").upsert(
-                like_data,
-                on_conflict="user_id,product_id"
-            ).execute()
-            
-            if like_result.data:
-                return {
-                    "success": True,
-                    "message": f"Successfully liked product {product_id}"
-                }
-            else:
-                raise Exception("Failed to insert like record")
-                
-        except Exception as e:
-            error_msg = f"Failed to like product {product_id} for user {user_id}: {str(e)}"
-            logger_service.error(error_msg)
-            return {
-                "success": False,
-                "message": error_msg
-            }
-
-    def dislike_product(self, user_id: str, product_id: str) -> Dict[str, Any]:
-        """
-        Dislike a product for a user by managing both likes and dislikes tables.
-        
-        This method performs the following operations:
-        1. Remove any existing like for this user/product combination
-        2. Add a dislike entry (using upsert to handle duplicate dislikes gracefully)
-        
-        Args:
-            user_id: ID of the user disliking the product
-            product_id: ID of the product being disliked
-            
-        Returns:
-            Dict containing:
-                - success: Boolean indicating operation success
-                - message: Success or error message
-                
-        Raises:
-            Exception: If database operations fail
-        """
-        try:
-            # Step 1: Remove from likes table if exists
-            like_result = self.supabase.table("user_product_likes").delete().eq(
-                "user_id", user_id
-            ).eq("product_id", product_id).execute()
-            
-            if like_result.data:
-                logger_service.info(f"Removed existing like for user {user_id}, product {product_id}")
-            
-            # Step 2: Add to dislikes table (upsert to handle duplicates)
-            dislike_data = {
-                "user_id": user_id,
-                "product_id": product_id,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            
-            dislike_result = self.supabase.table("user_product_dislikes").upsert(
-                dislike_data,
-                on_conflict="user_id,product_id"
-            ).execute()
-            
-            if dislike_result.data:
-                return {
-                    "success": True,
-                    "message": f"Successfully disliked product {product_id}"
-                }
-            else:
-                raise Exception("Failed to insert dislike record")
-                
-        except Exception as e:
-            error_msg = f"Failed to dislike product {product_id} for user {user_id}: {str(e)}"
-            logger_service.error(error_msg)
-            return {
-                "success": False,
-                "message": error_msg
-            }
-
     def get_liked_products(self, user_id: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
         """
         Retrieve all products that a user has liked with pagination.
@@ -1055,6 +973,124 @@ class DatabaseService:
                 "page": page,
                 "page_size": page_size
             }
+
+    def like_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
+        """
+        Like a product for a user by managing both likes and dislikes tables.
+        
+        This method performs the following operations:
+        1. Remove any existing dislike for this user/product combination
+        2. Add a like entry (using upsert to handle duplicate likes gracefully)
+        
+        Args:
+            user_id: ID of the user liking the product
+            product_id: ID of the product being liked
+            
+        Returns:
+            Dict containing:
+                - success: Boolean indicating operation success
+                - message: Success or error message
+                
+        Raises:
+            Exception: If database operations fail
+        """
+        try:
+            # Step 1: Remove from dislikes table if exists
+            dislike_result = self.supabase.table("user_product_dislikes").delete().eq(
+                "user_id", user_id
+            ).eq("product_id", product_id).execute()
+            
+            if dislike_result.data:
+                logger_service.info(f"Removed existing dislike for user {user_id}, product {product_id}")
+            
+            # Step 2: Add to likes table (upsert to handle duplicates)
+            like_data = {
+                "user_id": user_id,
+                "product_id": product_id,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            like_result = self.supabase.table("user_product_likes").upsert(
+                like_data,
+                on_conflict="user_id,product_id"
+            ).execute()
+            
+            if like_result.data:
+                return DatabaseLikeResponse(
+                    success=True,
+                    message=f"Successfully liked product {product_id}",
+                    is_liked=True
+                )
+            else:
+                raise Exception("Failed to insert like record")
+                
+        except Exception as e:
+            error_msg = f"Failed to like product {product_id} for user {user_id}: {str(e)}"
+            logger_service.error(error_msg)
+            return DatabaseLikeResponse(
+                success=False,
+                message=error_msg,
+                is_liked=False
+            )
+
+    def dislike_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
+        """
+        Dislike a product for a user by managing both likes and dislikes tables.
+        
+        This method performs the following operations:
+        1. Remove any existing like for this user/product combination
+        2. Add a dislike entry (using upsert to handle duplicate dislikes gracefully)
+        
+        Args:
+            user_id: ID of the user disliking the product
+            product_id: ID of the product being disliked
+            
+        Returns:
+            Dict containing:
+                - success: Boolean indicating operation success
+                - message: Success or error message
+                
+        Raises:
+            Exception: If database operations fail
+        """
+        try:
+            # Step 1: Remove from likes table if exists
+            like_result = self.supabase.table("user_product_likes").delete().eq(
+                "user_id", user_id
+            ).eq("product_id", product_id).execute()
+            
+            if like_result.data:
+                logger_service.info(f"Removed existing like for user {user_id}, product {product_id}")
+            
+            # Step 2: Add to dislikes table (upsert to handle duplicates)
+            dislike_data = {
+                "user_id": user_id,
+                "product_id": product_id,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            
+            dislike_result = self.supabase.table("user_product_dislikes").upsert(
+                dislike_data,
+                on_conflict="user_id,product_id"
+            ).execute()
+            
+            if dislike_result.data:
+                return DatabaseLikeResponse(
+                    success=True,
+                    message=f"Successfully disliked product {product_id}",
+                    is_liked=False
+                )
+            else:
+                raise Exception("Failed to insert dislike record")
+                
+        except Exception as e:
+            error_msg = f"Failed to dislike product {product_id} for user {user_id}: {str(e)}"
+            logger_service.error(error_msg)
+            return DatabaseLikeResponse(
+                success=False,
+                message=error_msg,
+                is_liked=False
+            )
 
 # === SEMANTIC EMBEDDING METHODS ===
     def _get_text_embedding(self, text: str) -> List[float]:

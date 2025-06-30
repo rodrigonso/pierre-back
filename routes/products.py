@@ -69,6 +69,7 @@ class LikedProductResponse(ProductData):
 async def get_products(
     page: int = Query(1, ge=1, description="Page number (starting from 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of products per page"),
+    include_likes: bool = Query(False, description="Include user likes in response"),
     current_user: User = Depends(get_current_user) # just to ensure user is authenticated, not used in this endpoint
 ):
     """
