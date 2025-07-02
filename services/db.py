@@ -1,4 +1,4 @@
-from supabase import Client, create_client
+from supabase import Client, create_client, acreate_client
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -20,8 +20,6 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("Missing Supabase configuration in environment variables")
 
-# Create Supabase service client (with elevated permissions)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 logger_service = get_logger_service()
 
 T = TypeVar('T')
@@ -56,6 +54,7 @@ class DatabaseProduct(BaseModel):
     color: str
     points: int
     style: str
+    is_liked: Optional[bool] = None
 
 class DatabaseOutfit(BaseModel):
     id: Optional[int] = None
@@ -81,12 +80,20 @@ class DatabaseService:
 
     def __init__(self):
         """Initialize the database service with Supabase client and OpenAI client."""
-        self.supabase = supabase
         # Initialize OpenAI client for embeddings
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+    async def initialize_client(self):
+        """
+        Initialize the Supabase client asynchronously.
+        
+        This method is necessary to ensure the Supabase client is created
+        with elevated permissions for CRUD operations.
+        """
+        self.supabase: Client = await acreate_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
 # === OUTFITS CRUD OPERATIONS ===
-    def get_outfit(self, outfit_id: int) -> Optional[DatabaseOutfit]:
+    async def get_outfit(self, outfit_id: int, user_id: str = None, include_likes: bool = False) -> Optional[DatabaseOutfit]:
         """
         Retrieve an outfit without its associated products.
         
@@ -98,7 +105,7 @@ class DatabaseService:
         """
         try:
             # Get outfit data without products
-            outfit_result = self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
+            outfit_result = await self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
             
             if not outfit_result.data:
                 return None
@@ -114,7 +121,7 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
-    def get_outfit_with_products(self, outfit_id: int, user_id: str = None, include_likes: bool = False) -> Optional[DatabaseOutfit]:
+    async def get_outfit_with_products(self, outfit_id: int, user_id: str = None, include_likes: bool = False) -> Optional[DatabaseOutfit]:
         """
         Retrieve an outfit along with all its associated products.
         
@@ -126,17 +133,17 @@ class DatabaseService:
         """
         try:
             if include_likes:
-                outfit_result = self.supabase.table("outfits").select(
+                outfit_result = await self.supabase.table("outfits").select(
                     "*, user_outfit_likes!left(outfit_id)"
                 ).eq("id", outfit_id).execute()
             else:
-                outfit_result = self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
+                outfit_result = await self.supabase.table("outfits").select("*").eq("id", outfit_id).execute()
 
             if not outfit_result.data:
                 return None
 
             outfit = outfit_result.data[0]
-            products = self._get_outfit_products(outfit_id)
+            products = await self._get_outfit_products(outfit_id)
 
             if include_likes and user_id:
                 outfit['is_liked'] = len(outfit.get("user_outfit_likes", [])) == 1
@@ -149,7 +156,7 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
-    def get_outfits(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_outfits(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve a paginated list of outfits from the database.
         
@@ -164,11 +171,11 @@ class DatabaseService:
             offset = (page - 1) * page_size
 
             if include_likes and user_id:
-                outfits = self.supabase.table("outfits").select("*, user_outfit_likes!left(outfit_id)").eq("user_outfit_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+                outfits = await self.supabase.table("outfits").select("*, user_outfit_likes!left(outfit_id)").eq("user_outfit_likes.user_id", user_id).order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
             else:
-                outfits = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
+                outfits = await self.supabase.table("outfits").select("*").order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
 
-            count_result = self.supabase.table("outfits").select("id", count="exact").execute()
+            count_result = await self.supabase.table("outfits").select("id", count="exact").execute()
             total_count = count_result.count if count_result.count else 0
 
             # Convert raw outfit data to DatabaseOutfit objects
@@ -207,7 +214,7 @@ class DatabaseService:
                 success=False
             )
 
-    def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits along with their associated products with pagination.
 
@@ -227,11 +234,11 @@ class DatabaseService:
             
             if include_likes and user_id:
                 # Get outfits with pagination and user likes
-                outfits = self.supabase.table("outfits").select(
+                outfits = await self.supabase.table("outfits").select(
                     "*, user_outfit_likes!left(outfit_id)"
                 ).eq("user_outfit_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
             else:
-                outfits = self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
+                outfits = await self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
 
             if not outfits.data:
                 return DatabasePaginatedResponse[DatabaseOutfit](
@@ -243,7 +250,7 @@ class DatabaseService:
                 )
             
             # Get total count for pagination
-            count_result = self.supabase.table("outfits").select("id", count="exact").execute()
+            count_result = await self.supabase.table("outfits").select("id", count="exact").execute()
             total_count = count_result.count if count_result.count else 0
             
             # Convert raw outfit data to DatabaseOutfit objects
@@ -264,7 +271,7 @@ class DatabaseService:
             
             # Enrich outfits with their products
             for outfit in outfit_objects:
-                outfit.products = self._get_outfit_products(outfit.id)
+                outfit.products = await self._get_outfit_products(outfit.id)
 
             return DatabasePaginatedResponse[DatabaseOutfit](
                 data=outfit_objects,
@@ -285,7 +292,7 @@ class DatabaseService:
                 success=False
             )
 
-    def get_liked_outfits(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_liked_outfits(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits that a user has liked with pagination.
 
@@ -302,7 +309,7 @@ class DatabaseService:
             offset = (page - 1) * page_size
 
             # Get liked outfits with pagination through junction table
-            likes_result = self.supabase.table("user_outfit_likes").select(
+            likes_result = await self.supabase.table("user_outfit_likes").select(
                 """
                 outfit_id,
                 created_at,
@@ -313,7 +320,7 @@ class DatabaseService:
             ).execute()
 
             # Get total count for pagination
-            count_result = self.supabase.table("user_outfit_likes").select(
+            count_result = await self.supabase.table("user_outfit_likes").select(
                 "outfit_id", count="exact"
             ).eq("user_id", user_id).execute()
 
@@ -353,7 +360,7 @@ class DatabaseService:
                 success=False
             )
 
-    def get_liked_outfits_with_products(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_liked_outfits_with_products(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits that a user has liked along with their associated products with pagination.
         
@@ -367,7 +374,7 @@ class DatabaseService:
         """
         try:
             # Get liked outfits
-            liked_outfits_result = self.supabase.table("user_outfit_likes").select(
+            liked_outfits_result = await self.supabase.table("user_outfit_likes").select(
                 """
                 outfit_id,
                 created_at,
@@ -378,7 +385,7 @@ class DatabaseService:
             ).execute()
 
             # Get total count for pagination
-            count_result = self.supabase.table("user_outfit_likes").select(
+            count_result = await self.supabase.table("user_outfit_likes").select(
                 "outfit_id", count="exact"
             ).eq("user_id", user_id).execute()
 
@@ -399,7 +406,7 @@ class DatabaseService:
 
             # Enrich outfits with their products
             for outfit in outfit_objects:
-                outfit.products = self._get_outfit_products(outfit.id)
+                outfit.products = await self._get_outfit_products(outfit.id)
 
             return DatabasePaginatedResponse[DatabaseOutfit](
                 data=outfit_objects,
@@ -420,7 +427,7 @@ class DatabaseService:
                 success=False
             )
 
-    def search_outfits(self, query: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def search_outfits(self, query: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Search outfits based on name, style, description, and user prompt with pagination.
         
@@ -455,7 +462,7 @@ class DatabaseService:
             
             # Search outfits using PostgreSQL ILIKE for fuzzy text matching
             # Search across name, style, description, and user_prompt fields
-            search_result = self.supabase.table("outfits").select(
+            search_result = await self.supabase.table("outfits").select(
                 "*"
             ).or_(
                 f"name.ilike.{search_pattern},"
@@ -467,7 +474,7 @@ class DatabaseService:
             logger_service.info(f"Found {len(search_result.data)} outfits matching query")
 
             # Get total count for pagination using the same search criteria
-            count_result = self.supabase.table("outfits").select(
+            count_result = await self.supabase.table("outfits").select(
                 "id", count="exact"
             ).or_(
                 f"name.ilike.{search_pattern},"
@@ -485,7 +492,7 @@ class DatabaseService:
                     outfit_obj = DatabaseOutfit(**outfit_data)
                     
                     # Get associated products for each outfit
-                    outfit_obj.products = self._get_outfit_products(outfit_obj.id)
+                    outfit_obj.products = await self._get_outfit_products(outfit_obj.id)
                     
                     outfit_objects.append(outfit_obj)
                 except Exception as e:
@@ -517,7 +524,7 @@ class DatabaseService:
                 success=False
             )
 
-    def insert_outfit_with_products(self, outfit: DatabaseOutfit, products: List[DatabaseProduct]) -> Dict[str, Any]:
+    async def insert_outfit_with_products(self, outfit: DatabaseOutfit, products: List[DatabaseProduct]) -> Dict[str, Any]:
         """
         Insert a new outfit along with its products and create the necessary relationships.
         
@@ -553,7 +560,7 @@ class DatabaseService:
                         product_data = product.model_dump(exclude_unset=True)
                         
                         # Use upsert to handle existing products gracefully
-                        result = self.supabase.table("products").upsert(
+                        result = await self.supabase.table("products").upsert(
                             product_data, 
                             on_conflict="id"
                         ).execute()
@@ -570,9 +577,9 @@ class DatabaseService:
             # Step 2: Insert the outfit
             logger_service.info(f"Inserting outfit: {outfit.name or 'Unknown'}")
             outfit_data = outfit.model_dump(exclude_unset=True)
-            
-            outfit_result = self.supabase.table("outfits").insert(outfit_data).execute()
-            
+
+            outfit_result = await self.supabase.table("outfits").insert(outfit_data).execute()
+
             if not outfit_result.data:
                 raise Exception("Failed to insert outfit")
                 
@@ -591,8 +598,8 @@ class DatabaseService:
                     }
                     for product_id in inserted_products
                 ]
-                
-                junction_result = self.supabase.table("product_outfit_junction").insert(
+
+                junction_result = await self.supabase.table("product_outfit_junction").insert(
                     junction_data
                 ).execute()
                 
@@ -615,7 +622,7 @@ class DatabaseService:
                 "message": error_msg
             }
 
-    def like_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
+    async def like_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
         """
         Like an outfit for a user by managing both likes and dislikes tables.
         
@@ -637,7 +644,7 @@ class DatabaseService:
         """
         try:
             # Step 1: Remove from dislikes table if exists
-            dislike_result = self.supabase.table("user_outfit_dislikes").delete().eq(
+            dislike_result = await self.supabase.table("user_outfit_dislikes").delete().eq(
                 "user_id", user_id
             ).eq("outfit_id", outfit_id).execute()
             
@@ -651,7 +658,7 @@ class DatabaseService:
                 "created_at": datetime.utcnow().isoformat()
             }
 
-            like_result = self.supabase.table("user_outfit_likes").upsert(
+            like_result = await self.supabase.table("user_outfit_likes").upsert(
                 like_data,
                 on_conflict="user_id,outfit_id"
             ).execute()
@@ -674,7 +681,7 @@ class DatabaseService:
                 is_liked=False
             )
 
-    def dislike_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
+    async def dislike_outfit(self, user_id: str, outfit_id: int) -> DatabaseLikeResponse:
         """
         Dislike an outfit for a user by managing both likes and dislikes tables.
         
@@ -696,7 +703,7 @@ class DatabaseService:
         """
         try:
             # Step 1: Remove from likes table if exists
-            like_result = self.supabase.table("user_outfit_likes").delete().eq(
+            like_result = await self.supabase.table("user_outfit_likes").delete().eq(
                 "user_id", user_id
             ).eq("outfit_id", outfit_id).execute()
             
@@ -709,7 +716,7 @@ class DatabaseService:
                 "outfit_id": outfit_id,
                 "created_at": datetime.utcnow().isoformat()
             }
-            dislike_result = self.supabase.table("user_outfit_dislikes").upsert(
+            dislike_result = await self.supabase.table("user_outfit_dislikes").upsert(
                 dislike_data,
                 on_conflict="user_id,outfit_id"
             ).execute()
@@ -731,7 +738,7 @@ class DatabaseService:
                 is_liked=False
             )
 
-    def find_similar_outfits(
+    async def find_similar_outfits(
         self, 
         outfit_id: int, 
         limit: int = 10,
@@ -762,7 +769,8 @@ class DatabaseService:
             logger_service.info(f"Finding similar outfits for outfit {outfit_id} with threshold {threshold}")
             
             # Step 1: Get the target outfit
-            target_outfit = self.get_outfit(outfit_id)
+            target_outfit = await self.get_outfit(outfit_id)
+
             if not target_outfit:
                 error_msg = f"Target outfit {outfit_id} not found"
                 logger_service.error(error_msg)
@@ -772,9 +780,9 @@ class DatabaseService:
                     data=[],
                     target=None
                 )
-            
+
             # Step 2: Get all other outfits (excluding the target)
-            all_outfits_result = self.supabase.table("outfits").select(
+            all_outfits_result = await self.supabase.table("outfits").select(
                 "id, name, description, image_url, user_prompt, style, points"
             ).neq("id", outfit_id).execute()
             
@@ -845,7 +853,7 @@ class DatabaseService:
             
             # Step 7: Enrich with products if needed
             for outfit in limited_outfits:
-                outfit.products = self._get_outfit_products(outfit.id)
+                outfit.products = await self._get_outfit_products(outfit.id)
             
             success_msg = f"Found {len(limited_outfits)} similar outfits for outfit {outfit_id}"
             logger_service.success(success_msg)
@@ -868,7 +876,7 @@ class DatabaseService:
             )
 
 # === PRODUCTS CRUD OPERATIONS ===
-    def get_products(self, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    async def get_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = True) -> DatabasePaginatedResponse[DatabaseProduct]:
         """
         Retrieve a paginated list of products.
 
@@ -877,42 +885,62 @@ class DatabaseService:
             page_size: Number of products per page
 
         Returns:
-            Dict containing:
-                - products: List of product data
+            DatabasePaginatedResponse containing:
+                - data: List of DatabaseProduct objects
                 - total_count: Total number of products
                 - page: Current page number
                 - page_size: Number of items per page
+                - success: Boolean indicating operation success
         """
         try:
             # Calculate offset for pagination
             offset = (page - 1) * page_size
 
-            # Get products with pagination
-            result = self.supabase.table("products").select("*").range(offset, offset + page_size - 1).execute()
+            if include_likes and user_id:
+                result = await self.supabase.table("products").select("*, user_product_likes!left(product_id)").eq("user_product_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+            else:
+                result = await self.supabase.table("products").select("*").range(offset, offset + page_size - 1).execute()
 
             # Get total count for pagination
-            count_result = self.supabase.table("products").select("id", count="exact").execute()
-
+            count_result = await self.supabase.table("products").select("id", count="exact").execute()
             total_count = count_result.count if count_result.count else 0
 
-            return {
-                "products": result.data if result.data else [],
-                "total_count": total_count,
-                "page": page,
-                "page_size": page_size
-            }
+            # Convert raw product data to DatabaseProduct objects
+            product_objects: List[DatabaseProduct] = []
+            for product_data in result.data:
+                try:
+                    if include_likes and user_id:
+                        product_data['is_liked'] = len(product_data.get("user_product_likes", [])) == 1
+                    else:
+                        product_data['is_liked'] = None
+
+                    product_obj = DatabaseProduct(**product_data)
+                    product_objects.append(product_obj)
+                except Exception as e:
+                    logger_service.error(f"Failed to convert product {product_data.get('id')} to DatabaseProduct: {str(e)}")
+                    # Continue processing other products instead of failing entirely
+                    continue
+
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=product_objects,
+                total_count=total_count,
+                page=page,
+                page_size=page_size,
+                success=True
+            )
 
         except Exception as e:
             error_msg = f"Failed to retrieve products: {str(e)}"
             logger_service.error(error_msg)
-            return {
-                "products": [],
-                "total_count": 0,
-                "page": page,
-                "page_size": page_size
-            }
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=[],
+                total_count=0,
+                page=page,
+                page_size=page_size,
+                success=False
+            )
 
-    def get_liked_products(self, user_id: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    async def get_liked_products(self, user_id: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseProduct]:
         """
         Retrieve all products that a user has liked with pagination.
 
@@ -922,18 +950,19 @@ class DatabaseService:
             page_size: Number of products per page
 
         Returns:
-            Dict containing:
-                - products: List of liked product data
+            DatabasePaginatedResponse containing:
+                - data: List of DatabaseProduct objects
                 - total_count: Total number of liked products
                 - page: Current page number
                 - page_size: Number of items per page
+                - success: Boolean indicating operation success
         """
         try:
             # Calculate offset for pagination
             offset = (page - 1) * page_size
 
             # Get liked products with pagination through junction table
-            likes_result = self.supabase.table("user_product_likes").select(
+            likes_result = await self.supabase.table("user_product_likes").select(
                 """
                 product_id,
                 created_at,
@@ -944,37 +973,47 @@ class DatabaseService:
             ).execute()
 
             # Get total count for pagination
-            count_result = self.supabase.table("user_product_likes").select(
+            count_result = await self.supabase.table("user_product_likes").select(
                 "product_id", count="exact"
             ).eq("user_id", user_id).execute()
 
             total_count = count_result.count if count_result.count else 0
 
-            # Process the results to get complete product data
-            products = []
+            # Convert raw product data to DatabaseProduct objects
+            product_objects: List[DatabaseProduct] = []
             for like_record in likes_result.data:
                 if like_record.get("products"):
-                    product_data = like_record["products"]
-                    products.append(product_data)
+                    try:
+                        product_data = like_record["products"]
+                        # Set is_liked to True since these are liked products
+                        product_data['is_liked'] = True
+                        product_obj = DatabaseProduct(**product_data)
+                        product_objects.append(product_obj)
+                    except Exception as e:
+                        logger_service.error(f"Failed to convert liked product {product_data.get('id')} to DatabaseProduct: {str(e)}")
+                        # Continue processing other products instead of failing entirely
+                        continue
 
-            return {
-                "products": products,
-                "total_count": total_count,
-                "page": page,
-                "page_size": page_size
-            }
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=product_objects,
+                total_count=total_count,
+                page=page,
+                page_size=page_size,
+                success=True
+            )
 
         except Exception as e:
             error_msg = f"Failed to retrieve user liked products: {str(e)}"
             logger_service.error(error_msg)
-            return {
-                "products": [],
-                "total_count": 0,
-                "page": page,
-                "page_size": page_size
-            }
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=[],
+                total_count=0,
+                page=page,
+                page_size=page_size,
+                success=False
+            )
 
-    def like_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
+    async def like_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
         """
         Like a product for a user by managing both likes and dislikes tables.
         
@@ -996,7 +1035,7 @@ class DatabaseService:
         """
         try:
             # Step 1: Remove from dislikes table if exists
-            dislike_result = self.supabase.table("user_product_dislikes").delete().eq(
+            dislike_result = await self.supabase.table("user_product_dislikes").delete().eq(
                 "user_id", user_id
             ).eq("product_id", product_id).execute()
             
@@ -1009,8 +1048,8 @@ class DatabaseService:
                 "product_id": product_id,
                 "created_at": datetime.utcnow().isoformat()
             }
-            
-            like_result = self.supabase.table("user_product_likes").upsert(
+
+            like_result = await self.supabase.table("user_product_likes").upsert(
                 like_data,
                 on_conflict="user_id,product_id"
             ).execute()
@@ -1033,7 +1072,7 @@ class DatabaseService:
                 is_liked=False
             )
 
-    def dislike_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
+    async def dislike_product(self, user_id: str, product_id: str) -> DatabaseLikeResponse:
         """
         Dislike a product for a user by managing both likes and dislikes tables.
         
@@ -1055,7 +1094,7 @@ class DatabaseService:
         """
         try:
             # Step 1: Remove from likes table if exists
-            like_result = self.supabase.table("user_product_likes").delete().eq(
+            like_result = await self.supabase.table("user_product_likes").delete().eq(
                 "user_id", user_id
             ).eq("product_id", product_id).execute()
             
@@ -1068,8 +1107,8 @@ class DatabaseService:
                 "product_id": product_id,
                 "created_at": datetime.utcnow().isoformat()
             }
-            
-            dislike_result = self.supabase.table("user_product_dislikes").upsert(
+
+            dislike_result = await self.supabase.table("user_product_dislikes").upsert(
                 dislike_data,
                 on_conflict="user_id,product_id"
             ).execute()
@@ -1174,7 +1213,7 @@ class DatabaseService:
             return 0.0
 
 # === STORAGE METHODS ===
-    def upload_image(self, file_name: str, data: bytes) -> str:
+    async def upload_image(self, file_name: str, data: bytes) -> str:
         """
         Uploads a binary file to a Supabase storage bucket and returns the public URL.
 
@@ -1183,15 +1222,15 @@ class DatabaseService:
         :return: The public URL of the uploaded file.
         """
         # Upload the file to the specified bucket
-        response = self.supabase.storage.from_('generated-images').upload(file_name, data)
+        response = await self.supabase.storage.from_('generated-images').upload(file_name, data)
         logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
 
         # Generate the public URL for the uploaded file
-        public_url = self.supabase.storage.from_('generated-images').get_public_url(file_name)
+        public_url = await self.supabase.storage.from_('generated-images').get_public_url(file_name)
         return public_url
 
 # === HELPER METHODS ===
-    def _get_outfit_products(self, outfit_id: int) -> Optional[List[DatabaseProduct]]:
+    async def _get_outfit_products(self, outfit_id: int) -> Optional[List[DatabaseProduct]]:
         """
         Retrieve all products associated with a specific outfit.
         
@@ -1203,7 +1242,7 @@ class DatabaseService:
         """
         try:
             # Get products through junction table
-            products_result = self.supabase.table("product_outfit_junction").select(
+            products_result = await self.supabase.table("product_outfit_junction").select(
                 "products (*)"
             ).eq("outfit_id", outfit_id).execute()
             
@@ -1232,7 +1271,7 @@ class DatabaseService:
 # Create a singleton instance for use across the application
 db_service = DatabaseService()
 
-def get_database_service() -> DatabaseService:
+async def get_database_service() -> DatabaseService:
     """
     Dependency function to get the database service instance.
     Use this in FastAPI route dependencies.
@@ -1240,4 +1279,6 @@ def get_database_service() -> DatabaseService:
     Returns:
         DatabaseService: Singleton database service instance
     """
+
+    await db_service.initialize_client()
     return db_service

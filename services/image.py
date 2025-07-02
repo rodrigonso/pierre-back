@@ -8,11 +8,19 @@ from services.db import get_database_service
 from services.logger import get_logger_service
 
 logger_service = get_logger_service()
-database_service = get_database_service()
 
 class ImageService:
     def __init__(self):
         self.client = genai.Client()
+        self.database_service = None
+
+    async def _ensure_database_service(self):
+        """
+        Ensure the database service is initialized.
+        This method should be called before any database operations.
+        """
+        if self.database_service is None:
+            self.database_service = await get_database_service()
 
     def _save_image(self, data: bytes, name: str) -> str:
         path = f"images/{name}"
@@ -68,7 +76,10 @@ class ImageService:
 
         return files, temp_files
 
-    def generate_image(self, outfit: Outfit):
+    async def generate_image(self, outfit: Outfit):
+        # Ensure database service is initialized
+        await self._ensure_database_service()
+        
         images, temp_images = self._process_products(outfit.products)
 
         user_parts = [types.Part.from_uri(file_uri=image.uri, mime_type=image.mime_type) for image in images]
@@ -84,7 +95,7 @@ class ImageService:
 
                     file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
                     binary_data = candidate.content.parts[0].inline_data.data
-                    generated_image_url = database_service.upload_image(file_name, binary_data)
+                    generated_image_url = await self.database_service.upload_image(file_name, binary_data)
 
                     break
                 else:

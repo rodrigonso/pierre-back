@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 import uuid
+import asyncio
 from services.stylist import StylistService, Outfit
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
 from utils.models import User
@@ -18,12 +19,12 @@ router = APIRouter()
 auth_service = get_auth_service()
 logger_service = get_logger_service()
 image_service = get_image_service()
-database_service = get_database_service()
 
 class CreateOutfitResponse(BaseModel):
     user_prompt: str
     outfits: List[Outfit] = []
     success: bool = True
+    cancelled: Optional[bool] = None
 
 class CreateOutfitRequest(BaseModel):
     prompt: str
@@ -73,7 +74,7 @@ def _convert_outfit_to_database_models(outfit: Outfit):
     
     return db_outfit, db_products
 
-def _generate_outfit_image(outfit: Outfit) -> str:
+async def _generate_outfit_image(outfit: Outfit) -> str:
     """
     Generate an image for the given outfit concept.
     
@@ -84,11 +85,11 @@ def _generate_outfit_image(outfit: Outfit) -> str:
         URL of the generated outfit image
     """
     logger_service.info(f"Generating outfit image for: {outfit.name}")
-    outfit_image = image_service.generate_image(outfit)
+    outfit_image = await image_service.generate_image(outfit)
     logger_service.success(f"Outfit image generated: {outfit_image}")
     return outfit_image
 
-def _save_outfit_to_db(outfit: Outfit) -> str:
+async def _save_outfit_to_db(outfit: Outfit, database_service: DatabaseService) -> str:
     """
     Save the generated outfit to the database.
     
@@ -101,7 +102,7 @@ def _save_outfit_to_db(outfit: Outfit) -> str:
     db_outfit, db_products = _convert_outfit_to_database_models(outfit)
     logger_service.info(f"Saving outfit '{db_outfit.name}' with {len(db_products)} products to database")
     
-    save_result = database_service.insert_outfit_with_products(db_outfit, db_products)
+    save_result = await database_service.insert_outfit_with_products(db_outfit, db_products)
     
     if not save_result['success']:
         logger_service.error(f"Failed to save outfit '{db_outfit.name}' to database: {save_result['error']}")
@@ -114,24 +115,34 @@ def _save_outfit_to_db(outfit: Outfit) -> str:
 async def create_outfit(
     request: CreateOutfitRequest, 
     user: User = Depends(get_current_user),
+    database_service: DatabaseService = Depends(get_database_service)
 ):
     try:
         logger_service.info(f"Generating outfit for user: {user.id} with prompt: {request.prompt} and number of outfits: {request.number_of_outfits}")
         logger_service.debug(f"Provided user data: {user.model_dump()}")
-
-        # Create stylist service context from user data
         stylist_service = StylistService(user=user, user_prompt=request.prompt)
-        outfit: Outfit = await stylist_service.run()
-        logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
+        
+        try:
+            outfit: Outfit = await stylist_service.run()
+            logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
 
-        outfit.image_url = _generate_outfit_image(outfit)
+        except asyncio.CancelledError:
+            logger_service.warning(f"Outfit generation cancelled for user: {user.id}")
+            return CreateOutfitResponse(
+                user_prompt=request.prompt,
+                outfits=[],
+                success=False,
+                cancelled=True
+            )
+
+        outfit.image_url = await _generate_outfit_image(outfit)
 
         # Convert outfit concept to database models
         db_outfit, db_products = _convert_outfit_to_database_models(outfit)
         logger_service.info(f"Saving outfit '{db_outfit.name}' with {len(db_products)} products to database")
 
         # Save to database
-        outfit_id = _save_outfit_to_db(outfit)
+        outfit_id = await _save_outfit_to_db(outfit, database_service)
         outfit.id = outfit_id
 
         return CreateOutfitResponse(
@@ -142,6 +153,15 @@ async def create_outfit(
 
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        # Handle cancellation at the top level as well (in case it happens during other operations)
+        logger_service.warning(f"Request cancelled for user: {user.id}")
+        return CreateOutfitResponse(
+            user_prompt=request.prompt,
+            outfits=[],
+            success=False,
+            cancelled=True
+        )
     except Exception as e:
         logger_service.error(f"Failed to create outfit: {str(e)}")
         raise HTTPException(

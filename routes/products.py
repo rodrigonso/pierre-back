@@ -5,13 +5,12 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from utils.models import User
 from utils.auth import get_current_user
-from services.db import get_database_service, DatabaseService
+from services.db import get_database_service, DatabasePaginatedResponse, DatabaseProduct, DatabaseLikeResponse, DatabaseService
 from services.logger import get_logger_service
 
 # Create router for product endpoints
 router = APIRouter()
 logger_service = get_logger_service()
-database_service = get_database_service()
 
 # ============================================================================
 # PYDANTIC MODELS FOR REQUEST/RESPONSE
@@ -65,12 +64,13 @@ class LikedProductResponse(ProductData):
 # PRODUCT ENDPOINTS
 # ============================================================================
 
-@router.get("/products/", response_model=ProductsResponse)
+@router.get("/products/", response_model=DatabasePaginatedResponse[DatabaseProduct])
 async def get_products(
     page: int = Query(1, ge=1, description="Page number (starting from 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of products per page"),
-    include_likes: bool = Query(False, description="Include user likes in response"),
-    current_user: User = Depends(get_current_user) # just to ensure user is authenticated, not used in this endpoint
+    include_likes: bool = Query(True, description="Include user likes in response"),
+    current_user: User = Depends(get_current_user),  # just to ensure user is authenticated, not used in this endpoint
+    database_service: DatabaseService = Depends(get_database_service)
 ):
     """
     Get all products with pagination and optional filtering.
@@ -81,49 +81,15 @@ async def get_products(
     try:
         logger_service.info(f"Fetching products - Page: {page}, Size: {page_size}")
         
-        result = database_service.get_products(
+        result: DatabasePaginatedResponse[DatabaseProduct] = await database_service.get_products(
             page=page,
             page_size=page_size,
+            user_id=current_user.id,
+            include_likes=include_likes
         )
-        
-        # Convert results to ProductData models
-        products = []
-        for product in result["products"]:
-            # Parse created_at if it exists
-            created_at = None
-            if product.get("created_at"):
-                try:
-                    created_at = datetime.fromisoformat(product["created_at"].replace('Z', '+00:00'))
-                except:
-                    created_at = None
 
-            product = ProductData(
-                id=product["id"],
-                title=product["title"],
-                brand=product["brand"],
-                type=product["type"],
-                price=product["price"],
-                description=product["description"],
-                images=product["images"],
-                link=product["link"],
-                search_query=product["search_query"],
-                style=product["style"],
-                color=product["color"],
-                points=product["points"],
-                created_at=created_at
-            )
-            products.append(product)
-        
-        logger_service.success(f"Successfully retrieved {len(products)} products")
-        
-        return ProductsResponse(
-            products=products,
-            total_count=result["total_count"],
-            page=result["page"],
-            page_size=result["page_size"],
-            success=True
-        )
-        
+        return result
+
     except Exception as e:
         logger_service.error(f"Failed to retrieve products: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve products: {str(e)}")
@@ -134,6 +100,7 @@ async def search_products(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
     current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    database_service: DatabaseService = Depends(get_database_service)
 ):
     """
     Search products by query string with pagination
@@ -156,7 +123,7 @@ async def search_products(
         search_query = search_query.or_(search_conditions)
                 
         # Execute search with pagination and ordering
-        result = search_query.order("created_at", desc=True).range(
+        result = await search_query.order("created_at", desc=True).range(
             offset, offset + page_size - 1
         ).execute()
         
@@ -164,20 +131,12 @@ async def search_products(
         count_query = database_service.supabase.table("products").select("id", count="exact")
         count_query = count_query.or_(search_conditions)
         
-        count_result = count_query.execute()
+        count_result = await count_query.execute()
         total_count = count_result.count if count_result.count else 0
         
         # Convert results to ProductData models
         products = []
         for product_data in result.data:
-            # Parse created_at if it exists
-            created_at = None
-            if product_data.get("created_at"):
-                try:
-                    created_at = datetime.fromisoformat(product_data["created_at"].replace('Z', '+00:00'))
-                except:
-                    created_at = None
-            
             product = ProductData(
                 id=product_data["id"],
                 title=product_data.get("title"),
@@ -191,7 +150,6 @@ async def search_products(
                 images=product_data.get("images", []),
                 link=product_data.get("link"),
                 search_query=product_data.get("search_query"),
-                created_at=created_at
             )
             products.append(product)
         
@@ -214,11 +172,12 @@ async def search_products(
 # LIKE/DISLIKE ENDPOINTS
 # ============================================================================
 
-@router.post("/products/{product_id}/like", response_model=LikeProductResponse)
+@router.post("/products/{product_id}/like", response_model=DatabaseLikeResponse)
 async def like_product(
     product_id: str,
     current_user: User = Depends(get_current_user),
-) -> LikeProductResponse:
+    database_service: DatabaseService = Depends(get_database_service)
+) -> DatabaseLikeResponse:
     """
     Like a product for the current user.
     
@@ -230,27 +189,15 @@ async def like_product(
         current_user: Authenticated user who is liking the product
         
     Returns:
-        LikeProductResponse: Success status with like information
-        
+        DatabaseLikeResponse: Success status with like information
+
     Raises:
         HTTPException: If product not found or like operation fails
     """
     try:
         # Use the database service to handle the like operation
-        result = database_service.like_product(user_id=current_user.id, product_id=product_id)
-        
-        if result["success"]:
-            return LikeProductResponse(
-                success=True,
-                message=result["message"],
-                product_id=product_id,
-                is_liked=True
-            )
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=result["message"]
-            )
+        result: DatabaseLikeResponse = await database_service.like_product(user_id=current_user.id, product_id=product_id)
+        return result
         
     except HTTPException:
         raise
@@ -261,11 +208,12 @@ async def like_product(
         )
 
 
-@router.post("/products/{product_id}/dislike", response_model=LikeProductResponse)
+@router.post("/products/{product_id}/dislike", response_model=DatabaseLikeResponse)
 async def dislike_product(
     product_id: str,
     current_user: User = Depends(get_current_user),
-) -> LikeProductResponse:
+    database_service: DatabaseService = Depends(get_database_service)
+) -> DatabaseLikeResponse:
     """
     Unlike (remove like from) a product for the current user.
     
@@ -277,28 +225,16 @@ async def dislike_product(
         current_user: Authenticated user who is unliking the product
         
     Returns:
-        LikeProductResponse: Success status with unlike information
-        
+        DatabaseLikeResponse: Success status with unlike information
+
     Raises:
         HTTPException: If product not found or unlike operation fails
     """
     try:
         # Use the database service to handle the unlike operation
-        result = database_service.dislike_product(user_id=current_user.id, product_id=product_id)
-        
-        if result["success"]:
-            return LikeProductResponse(
-                success=True,
-                message=result["message"],
-                product_id=product_id,
-                is_liked=False
-            )
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=result["message"]
-            )
-        
+        result: DatabaseLikeResponse = await database_service.dislike_product(user_id=current_user.id, product_id=product_id)
+        return result
+
     except HTTPException:
         raise
     except Exception as e:
@@ -308,12 +244,13 @@ async def dislike_product(
         )
 
 
-@router.get("/products/liked", response_model=ProductsResponse)
+@router.get("/products/liked", response_model=DatabasePaginatedResponse[DatabaseProduct])
 async def get_liked_products(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    current_user: User = Depends(get_current_user)
-) -> ProductsResponse:
+    current_user: User = Depends(get_current_user),
+    database_service: DatabaseService = Depends(get_database_service)
+) -> DatabasePaginatedResponse[DatabaseProduct]:
     """
     Get all products that the current user has liked with pagination.
     
@@ -323,7 +260,7 @@ async def get_liked_products(
         current_user: Authenticated user
         
     Returns:
-        ProductsResponse: List of user's liked products with pagination info
+        DatabasePaginatedResponse[DatabaseProduct]: List of user's liked products with pagination info
         
     Raises:
         HTTPException: If database operation fails
@@ -331,47 +268,13 @@ async def get_liked_products(
     try:
         logger_service.info(f"Fetching liked products for user {current_user.id} - Page: {page}, Size: {page_size}")
 
-        result = database_service.get_liked_products(
+        result: DatabasePaginatedResponse[DatabaseProduct] = await database_service.get_liked_products(
             user_id=current_user.id,
             page=page,
             page_size=page_size
         )
         
-        products = []
-        for product_data in result["products"]:
-            # Parse created_at if it exists
-            created_at = None
-            if product_data.get("created_at"):
-                try:
-                    created_at = datetime.fromisoformat(product_data["created_at"].replace('Z', '+00:00'))
-                except:
-                    created_at = None
-
-            product = LikedProductResponse(
-                id=product_data["id"],
-                title=product_data.get("title"),
-                brand=product_data.get("brand"),
-                type=product_data.get("type"),
-                price=product_data.get("price"),
-                description=product_data.get("description"),
-                images=product_data.get("images", []),
-                link=product_data.get("link"),
-                search_query=product_data.get("search_query"),
-                style=product_data.get("style"),
-                color=product_data.get("color"),
-                points=product_data.get("points"),
-                created_at=created_at,
-                is_liked=True
-            )
-            products.append(product)
-
-        return ProductsResponse(
-            products=products,
-            total_count=result["total_count"],
-            page=result["page"],
-            page_size=result["page_size"],
-            success=True
-        )
+        return result
         
     except Exception as e:
         logger_service.error(f"Failed to retrieve liked products: {str(e)}")
