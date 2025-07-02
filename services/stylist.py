@@ -355,7 +355,8 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
 ## Available Products:
 {chr(10).join([f'''{p.title}
 - Brand: {p.brand}
-- Price: ${p.price}\n''' for p in products])}
+- Price: ${p.price}''' for p in products])}
+
 """
 
                     task = Runner.run(self.shopper_agent, shopper_input, context=self.context)
