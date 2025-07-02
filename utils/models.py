@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 
 class SellerInfo(BaseModel):
     seller_name: Optional[str] = None
@@ -33,6 +34,9 @@ class Product(BaseModel):
     source: Optional[str] = None
     description: Optional[str] = None
     type: Optional[str] = None
+    caption: Optional[str] = None
+    match_score: Optional[float] = None
+    match_explanation: Optional[str] = None
 
 class Outfit(BaseModel):
     name: Optional[str] = None
@@ -53,3 +57,29 @@ class ProductMatch(BaseModel):
     image: str
     image_width: int
     image_height: int
+
+
+class User(BaseModel):
+    id: str
+    name: Optional[str] = None
+    gender: Optional[str] = None
+
+    positive_brands: List[str] = []
+    negative_brands: List[str] = []
+
+    positive_styles: List[str] = []
+    negative_styles: List[str] = []
+
+    positive_colors: List[str] = []
+    negative_colors: List[str] = []
+
+class UserProfile(BaseModel):
+    user_id: str
+    email: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    provider: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    user_metadata: Optional[dict] = None
+    app_metadata: Optional[dict] = None
