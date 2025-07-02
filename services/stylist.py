@@ -137,31 +137,40 @@ class StylistService:
     def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
         return ItemHelpers.text_message_outputs(new_input.new_items)
 
-    def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[Product]]:
+    async def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[Product]]:
         """
         Fetch products for each item in the outfit concept.
-        This function is designed to be run in parallel for each item using multithreading.
+        This function runs the blocking search_products calls in a thread pool
+        and properly awaits them to avoid blocking the FastAPI event loop.
         Returns a dictionary mapping items to their corresponding products.
         """
-
-        with ThreadPoolExecutor(max_workers=len(items)) as executor:
-            # Submit all tasks
-            future_to_item = {
-                executor.submit(search_products, f"{item.search_query} {item.color} {item.type} {self.context.gender}"): item
-                for item in items
-            }
+        
+        loop = asyncio.get_event_loop()
+        
+        # Create async tasks that run the synchronous search_products in the thread pool
+        async def fetch_single_item(item: OutfitItem) -> tuple[OutfitItem, list[Product]]:
+            try:
+                search_query = f"{item.search_query} {item.color} {item.type} {self.context.gender}"
+                # Run the blocking search_products function in a thread pool
+                products = await loop.run_in_executor(None, search_products, search_query)
+                return item, products
+            except Exception as exc:
+                logger_service.error(f'Item {item.search_query} generated an exception: {exc}')
+                return item, []  # Return empty list for failed searches
+        
+        # Execute all tasks concurrently
+        tasks = [fetch_single_item(item) for item in items]
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Convert list of tuples back to dictionary
+        results = {}
+        for result in results_list:
+            if isinstance(result, Exception):
+                logger_service.error(f'Task failed with exception: {result}')
+                continue
+            item, products = result
+            results[item] = products
             
-            # Collect results as they complete
-            results = {}
-            for future in as_completed(future_to_item):
-                item = future_to_item[future]
-                try:
-                    products = future.result()
-                    results[item] = products
-                except Exception as exc:
-                    logger_service.error(f'Item {item.search_query} generated an exception: {exc}')
-                    results[item] = []  # Add empty list for failed searches
-
         return results
 
     def _convert_outfit_concept_to_outfit(self, outfit_concept: OutfitConcept) -> Outfit:
@@ -337,7 +346,14 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 stylist: RunResult = await Runner.run(self.stylist_agent, analyst_result.final_output.user_prompt, context=self.context)
                 outfit_concept: OutfitConcept = stylist.final_output
 
-                item_to_products = self._fetch_products(outfit_concept.items)
+                item_to_products: dict[OutfitItem, list[Product]] = {}
+                try:
+                    item_to_products = await self._fetch_products(outfit_concept.items)
+                except Exception as e:
+                    logger_service.error(f"Error fetching products: {e}")
+                    # If fetching products fails, we can either retry or break the loop
+                    # For now, let's just log the error and break
+                    break
 
                 # Then run the shopper_agent in parallel for each item-products pair
                 shopping_eval_tasks = []
