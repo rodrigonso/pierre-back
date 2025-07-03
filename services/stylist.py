@@ -116,6 +116,7 @@ class ProductStylistResponse:
     brand: str
     style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty"]
     type: Literal["top", "bottom", "dress", "outerwear", "shoes", "accessories", "jewelry"]
+    points: int
     reasoning: str
 
 class Product(BaseModel):
@@ -392,6 +393,12 @@ You are a fashion product stylist. Based on the provided user information below,
 - Consider the user's preferences, style, occasion, season, and any other relevant information.
 - Generate a search query that includes the user's preferences and style.
 - The search query should be concise and focused on finding products that match the user's request.
+- Determine how many points the item should have given the 7-point rule:
+
+For eg:
+- When one element is very bold or statement-making it will count as 2 points
+- Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
+- Wedding rings and simple stud earrings are often considered "neutral" and may not count
         """,
         output_type=ProductStylistResponse,
     )
@@ -539,7 +546,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
         result = await Runner.run(self.intent_agent, input, context=self.context)
         return result.final_output.intent
 
-    async def search_for_products(self) -> List[Product]:
+    async def search_for_products(self, num_items: int) -> List[Product]:
         """
         Generate and find products based on user request.
         
@@ -551,6 +558,8 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
         """
 
         with trace("Pierre_product_stylist"):
+            logger_service.info(f"Understanding user request: {self.context.user_prompt}")
+
             input: list[TResponseInputItem] = [{"content": self.context.user_prompt, "role": "user"}]
             product_shopper_result: RunResult = await Runner.run(self.product_stylist_agent, input, context=self.context)
             shopper_result: ProductStylistResponse = product_shopper_result.final_output
@@ -563,9 +572,10 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
                 style=shopper_result.style, 
                 reasoning=""
             )
-            
+
+            logger_service.info(f"Generated search query: {temp_item.search_query} for color: {temp_item.color}, type: {temp_item.type}, style: {temp_item.style}")
             # Fetch products using existing infrastructure
-            item_to_products = await self._fetch_products([temp_item], 5 )
+            item_to_products = await self._fetch_products([temp_item], num_items)
             found_products = item_to_products.get(temp_item, [])
             
             if not found_products:
@@ -574,29 +584,43 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
 
             logger_service.debug(f"Found {len(found_products)} products for evaluation")
 
-            # Prepare input for product evaluation
-            evaluator_input = f"""
-    ## User Request:
-    {self.context.user_prompt}
+            # Create parallel evaluation tasks for each product
+            evaluation_tasks = []
+            for product in found_products:
+                evaluator_input = f"""
+## User Request:
+{self.context.user_prompt}
 
-    ## Search Criteria:
-    - Search Query: {shopper_result.search_query}
-    - Color: {shopper_result.color}
-    - Brand: {shopper_result.brand}
-    - Style: {shopper_result.style}
-    - Type: {shopper_result.type}
+## Target Item Criteria:
+- Search Query: {shopper_result.search_query}
+- Color: {shopper_result.color}
+- Brand: {shopper_result.brand}
+- Style: {shopper_result.style}
+- Type: {shopper_result.type}
 
-    ## Available Products:
-    - Title: {chr(10).join([f'''{i+1}. {p.title}
-    - Brand: {p.brand}
-    - Price: ${p.price}
-    - Description: {p.description[:200]}...'''
-    for i, p in enumerate(found_products)])}
-    """
+## Product to Evaluate:
+- Title: {product.title}
+- Brand: {product.brand}
+- Price: ${product.price}
+- Description: {product.description[:200]}...
+"""
+                # Create evaluation task for this specific product
+                task = Runner.run(self.product_evaluator_agent, evaluator_input, context=self.context)
+                evaluation_tasks.append((product, task))
 
-            # Evaluate products using the product evaluator agent
-            evaluation_result: RunResult = await Runner.run(self.product_evaluator_agent, evaluator_input, context=self.context)
-            evaluations: list[ProductEvaluation] = evaluation_result.final_output
+            logger_service.debug(f"Created {len(evaluation_tasks)} evaluation tasks for products")
+            # Execute all evaluation tasks in parallel
+            evaluation_results = await asyncio.gather(*[task for _, task in evaluation_tasks])
+
+            logger_service.debug(f"Completed all product evaluations")
+            
+            # Flatten the results since each evaluation returns a list with one ProductEvaluation
+            evaluations = []
+            for i, (product, _) in enumerate(evaluation_tasks):
+                product_evaluations = evaluation_results[i].final_output
+                # Each result should contain exactly one evaluation for the specific product
+                if product_evaluations:
+                    evaluations.extend(product_evaluations)
 
             # Sort evaluations by score (highest first) and filter out low scores
             sorted_evaluations = sorted(evaluations, key=lambda x: x.score, reverse=True)
@@ -623,7 +647,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
                         images=matching_product.images,
                         description=matching_product.description,
                         search_query=shopper_result.search_query,
-                        points=1, # Default points for single product
+                        points=shopper_result.points,
                         color=shopper_result.color,
                         style=shopper_result.style
                     )

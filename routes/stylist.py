@@ -21,18 +21,9 @@ auth_service = get_auth_service()
 logger_service = get_logger_service()
 image_service = get_image_service()
 
-class CreateOutfitResponse(BaseModel):
-    user_prompt: str
-    outfits: List[Outfit] = []
-    success: bool = True
-    cancelled: Optional[bool] = None
-
-class CreateOutfitRequest(BaseModel):
-    prompt: str
-    number_of_outfits: Optional[int] = 1
-
 class StylistRequest(BaseModel):
     prompt: str
+    number_of_items: Optional[int] = 1
 
 class StylistResponse(BaseModel):
     user_prompt: str
@@ -118,67 +109,40 @@ async def _save_outfit_to_db(outfit: Outfit, database_service: DatabaseService) 
     if not save_result['success']:
         logger_service.error(f"Failed to save outfit '{db_outfit.name}' to database: {save_result['error']}")
         return {'success': False, 'error': save_result['error']}
-    
+
     logger_service.success(f"Outfit '{db_outfit.name}' saved to database with ID: {save_result['outfit_id']}")
     return save_result['outfit_id']
 
-@router.post("/stylist/outfit", response_model=CreateOutfitResponse)
-async def create_outfit(
-    request: CreateOutfitRequest, 
-    user: User = Depends(get_current_user),
-    database_service: DatabaseService = Depends(get_database_service)
-):
-    try:
-        logger_service.info(f"Generating outfit for user: {user.id} with prompt: {request.prompt} and number of outfits: {request.number_of_outfits}")
-        logger_service.debug(f"Provided user data: {user.model_dump()}")
-        stylist_service = StylistService(user=user, user_prompt=request.prompt)
+async def _generate_single_outfit(stylist_service: StylistService, database_service: DatabaseService, outfit_number: int) -> Outfit:
+    """
+    Generate a single outfit with image and save to database.
+    
+    Args:
+        stylist_service: The stylist service instance
+        database_service: Database service for saving results
+        outfit_number: The outfit number for logging purposes
         
-        try:
-            outfit: Outfit = await stylist_service.generate_outfit()
-            logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
-
-        except asyncio.CancelledError:
-            logger_service.warning(f"Outfit generation cancelled for user: {user.id}")
-            return CreateOutfitResponse(
-                user_prompt=request.prompt,
-                outfits=[],
-                success=False,
-                cancelled=True
-            )
-
-        outfit.image_url = await _generate_outfit_image(outfit)
-
-        # Convert outfit concept to database models
-        db_outfit, db_products = _convert_outfit_to_database_models(outfit)
-        logger_service.info(f"Saving outfit '{db_outfit.name}' with {len(db_products)} products to database")
-
-        # Save to database
-        outfit_id = await _save_outfit_to_db(outfit, database_service)
-        outfit.id = outfit_id
-
-        return CreateOutfitResponse(
-            user_prompt=request.prompt,
-            outfits=[outfit],
-            success=True
-        )
-
-    except HTTPException:
-        raise
-    except asyncio.CancelledError:
-        # Handle cancellation at the top level as well (in case it happens during other operations)
-        logger_service.warning(f"Request cancelled for user: {user.id}")
-        return CreateOutfitResponse(
-            user_prompt=request.prompt,
-            outfits=[],
-            success=False,
-            cancelled=True
-        )
-    except Exception as e:
-        logger_service.error(f"Failed to create outfit: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create outfit: {str(e)}"
-        )
+    Returns:
+        Outfit: Complete outfit with generated image and database ID
+        
+    Raises:
+        Exception: If outfit generation, image generation, or database save fails
+    """
+    logger_service.info(f"Generating outfit #{outfit_number}")
+    
+    # Generate the outfit
+    outfit = await stylist_service.generate_outfit()
+    logger_service.success(f"Generated outfit #{outfit_number}: {outfit.name} with {len(outfit.products)} products")
+    
+    # Generate image for the outfit
+    outfit.image_url = await _generate_outfit_image(outfit)
+    
+    # Save to database
+    outfit_id = await _save_outfit_to_db(outfit, database_service)
+    outfit.id = outfit_id
+    
+    logger_service.success(f"Completed outfit #{outfit_number}: {outfit.name}")
+    return outfit
 
 @router.post("/stylist/request", response_model=StylistResponse)
 async def stylist_request(
@@ -212,30 +176,65 @@ async def stylist_request(
         # First, determine the user's intent
         intent = await stylist_service.determine_user_intent()
         logger_service.info(f"Determined user intent: {intent}")
-        
-        # Route to appropriate method based on intent
+
+          # Route to appropriate method based on intent
         if intent == "generate_outfit":
+
             logger_service.info("Routing to outfit generation")
-            outfit = await stylist_service.generate_outfit()
             
-            # Generate image for the outfit
-            outfit.image_url = await _generate_outfit_image(outfit)
+            # Determine number of outfits to generate (default to 1)
+            num_items = getattr(request, 'number_of_items', 1)
+            logger_service.info(f"Generating {num_items} outfit(s) in parallel")
+
+            # Generate multiple outfits in parallel
+            outfit_tasks = [
+                _generate_single_outfit(stylist_service, database_service, i + 1)
+                for i in range(num_items)
+            ]
             
-            # Save to database
-            outfit_id = await _save_outfit_to_db(outfit, database_service)
-            outfit.id = outfit_id
-            
-            return StylistResponse(
-                user_prompt=request.prompt,
-                intent=intent,
-                result=f"Successfully generated outfit: {outfit.name}",
-                success=True,
-                data=[outfit],
-            )
-    
+            try:
+                outfits = await asyncio.gather(*outfit_tasks, return_exceptions=True)
+                
+                # Filter out any exceptions and collect successful outfits
+                successful_outfits = []
+                failed_count = 0
+                
+                for i, result in enumerate(outfits):
+                    if isinstance(result, Exception):
+                        logger_service.error(f"Failed to generate outfit #{i + 1}: {str(result)}")
+                        failed_count += 1
+                    else:
+                        successful_outfits.append(result)
+                
+                if not successful_outfits:
+                    # All outfit generations failed
+                    raise Exception(f"Failed to generate any outfits. {failed_count} out of {num_items} failed.")
+                
+                if failed_count > 0:
+                    logger_service.warning(f"Generated {len(successful_outfits)} outfits successfully, {failed_count} failed")
+                
+                # Create result message
+                if len(successful_outfits) == 1:
+                    result_message = f"Successfully generated outfit: {successful_outfits[0].name}"
+                else:
+                    outfit_names = [outfit.name for outfit in successful_outfits]
+                    result_message = f"Successfully generated {len(successful_outfits)} outfits: {', '.join(outfit_names)}"
+                
+                return StylistResponse(
+                    user_prompt=request.prompt,
+                    intent=intent,
+                    result=result_message,
+                    success=True,
+                    data=successful_outfits,
+                )
+                
+            except Exception as e:
+                logger_service.error(f"Error during parallel outfit generation: {str(e)}")
+                raise
+
         elif intent == "find_products":
             logger_service.info("Routing to product search")
-            products: List[Product] = await stylist_service.search_for_products()
+            products: List[Product] = await stylist_service.search_for_products(15)
             
             return StylistResponse(
                 user_prompt=request.prompt,
