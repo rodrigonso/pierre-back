@@ -4,13 +4,14 @@ from typing import List, Optional
 from pydantic import BaseModel
 import uuid
 import asyncio
-from services.stylist import StylistService, Outfit
+from services.stylist import StylistService, Outfit, Product
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
 from utils.models import User
 from utils.auth import get_current_user
 from services.image import get_image_service
 from services.logger import get_logger_service
 from services.auth import get_auth_service
+from utils.helpers import SearchProduct
 
 # Create router for stylist endpoints
 router = APIRouter()
@@ -29,6 +30,16 @@ class CreateOutfitResponse(BaseModel):
 class CreateOutfitRequest(BaseModel):
     prompt: str
     number_of_outfits: Optional[int] = 1
+
+class StylistRequest(BaseModel):
+    prompt: str
+
+class StylistResponse(BaseModel):
+    user_prompt: str
+    intent: str
+    result: str
+    success: bool = True
+    data: List[Outfit | Product] = []
 
 
 def _convert_outfit_to_database_models(outfit: Outfit):
@@ -123,7 +134,7 @@ async def create_outfit(
         stylist_service = StylistService(user=user, user_prompt=request.prompt)
         
         try:
-            outfit: Outfit = await stylist_service.run()
+            outfit: Outfit = await stylist_service.generate_outfit()
             logger_service.success(f"Generated outfit: {outfit.name} with {len(outfit.products)} products")
 
         except asyncio.CancelledError:
@@ -168,3 +179,90 @@ async def create_outfit(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create outfit: {str(e)}"
         )
+
+@router.post("/stylist/request", response_model=StylistResponse)
+async def stylist_request(
+    request: StylistRequest, 
+    user: User = Depends(get_current_user),
+    database_service: DatabaseService = Depends(get_database_service)
+):
+    """
+    Intelligent stylist endpoint that determines user intent and routes to appropriate method.
+    
+    This endpoint analyzes the user's prompt to determine whether they want:
+    - A complete outfit generated (generate_outfit)
+    - Specific products found (generate_products)
+    
+    Args:
+        request: StylistRequest containing the user's prompt
+        user: Authenticated user
+        database_service: Database service for saving results
+        
+    Returns:
+        StylistResponse: Contains intent classification and results
+        
+    Raises:
+        HTTPException: If processing fails
+    """
+    try:
+        logger_service.info(f"Processing intelligent stylist request for user: {user.id} with prompt: {request.prompt}")
+        logger_service.debug(f"Provided user data: {user.model_dump()}")
+        stylist_service = StylistService(user=user, user_prompt=request.prompt)
+        
+        # First, determine the user's intent
+        intent = await stylist_service.determine_user_intent()
+        logger_service.info(f"Determined user intent: {intent}")
+        
+        # Route to appropriate method based on intent
+        if intent == "generate_outfit":
+            logger_service.info("Routing to outfit generation")
+            outfit = await stylist_service.generate_outfit()
+            
+            # Generate image for the outfit
+            outfit.image_url = await _generate_outfit_image(outfit)
+            
+            # Save to database
+            outfit_id = await _save_outfit_to_db(outfit, database_service)
+            outfit.id = outfit_id
+            
+            return StylistResponse(
+                user_prompt=request.prompt,
+                intent=intent,
+                result=f"Successfully generated outfit: {outfit.name}",
+                success=True,
+                data=[outfit],
+            )
+    
+        elif intent == "find_products":
+            logger_service.info("Routing to product search")
+            products: List[Product] = await stylist_service.search_for_products()
+            
+            return StylistResponse(
+                user_prompt=request.prompt,
+                intent=intent,
+                result=f"Found {len(products)} products matching your request",
+                success=True,
+                data=products
+            )
+            
+        else:
+            # Fallback to outfit generation for unclear intent
+            logger_service.error(f"Unclear intent '{intent}', defaulting to outfit generation")
+
+            return StylistResponse(
+                user_prompt=request.prompt,
+                intent="unknown",
+                result=f"error: Unclear intent '{intent}'",
+                success=True,
+                data=[]
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger_service.error(f"Failed to process stylist request: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process stylist request: {str(e)}"
+        )
+

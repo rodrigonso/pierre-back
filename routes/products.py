@@ -29,7 +29,6 @@ class ProductData(BaseModel):
     search_query: str
     color: str
     style: str
-    created_at: datetime
     points: int
 
 class ProductsResponse(BaseModel):

@@ -1,14 +1,21 @@
 from agents import Agent, Runner, trace, TResponseInputItem, ItemHelpers, RunResult
 from pydantic import BaseModel
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 from dataclasses import dataclass
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
 from utils.helpers import SearchProduct, search_products
 from services.logger import get_logger_service
+from openai import OpenAI
+import os
 
 logger_service = get_logger_service()
+
+@dataclass
+class UserIntentResult:
+    intent: Literal["generate_outfit", "find_products"]
+    reasoning: str
 
 @dataclass
 class AnalystResult:
@@ -77,6 +84,12 @@ class OutfitProductEvaluation:
     reasoning: str
 
 @dataclass
+class ProductEvaluation:
+    score: float
+    product_title: str
+    reasoning: str
+
+@dataclass
 class EvaluationFeedback:
     feedback: str
     score: Literal["pass", "needs_improvement", "fail"]
@@ -95,6 +108,15 @@ class StylistServiceContext:
     negative_colors: list[str]
 
     user_prompt: str
+
+@dataclass
+class ProductStylistResponse:
+    search_query: str
+    color: str
+    brand: str
+    style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty"]
+    type: Literal["top", "bottom", "dress", "outerwear", "shoes", "accessories", "jewelry"]
+    reasoning: str
 
 class Product(BaseModel):
     id: str
@@ -132,12 +154,14 @@ class StylistService:
             negative_colors=user.negative_colors,
             user_prompt=user_prompt
         )
+        # Initialize OpenAI client for intent determination
+        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ============= Helpers ============
     def _update_input(self, new_input: RunResult) -> list[TResponseInputItem]:
         return ItemHelpers.text_message_outputs(new_input.new_items)
 
-    async def _fetch_products(self, items: list[OutfitItem]) -> dict[OutfitItem, list[Product]]:
+    async def _fetch_products(self, items: list[OutfitItem], num_results: int = 3) -> dict[OutfitItem, list[Product]]:
         """
         Fetch products for each item in the outfit concept.
         This function runs the blocking search_products calls in a thread pool
@@ -152,7 +176,7 @@ class StylistService:
             try:
                 search_query = f"{item.search_query} {item.color} {item.type} {self.context.gender}"
                 # Run the blocking search_products function in a thread pool
-                products = await loop.run_in_executor(None, search_products, search_query)
+                products = await loop.run_in_executor(None, search_products, search_query, num_results)
                 return item, products
             except Exception as exc:
                 logger_service.error(f'Item {item.search_query} generated an exception: {exc}')
@@ -331,8 +355,77 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
         output_type=EvaluationFeedback,
     )
 
-    async def run(self) -> Outfit:
-        with trace("Pierre"):
+    intent_agent = Agent[StylistServiceContext](
+        name="intent_classifier",
+        model="gpt-4o-mini",
+        instructions=lambda wrapper, agent: f"""
+## Intent Classification Instructions
+You are an AI assistant that classifies user fashion requests.
+
+Analyze the user's message and determine their intent:
+- "generate_outfit": User wants a complete outfit created/styled for them
+- "find_products": User is looking for specific products or items
+
+Respond with ONLY the intent classification: either "generate_outfit" or "find_products".
+        """,
+        output_type=UserIntentResult,
+    )
+
+    product_stylist_agent = Agent[StylistServiceContext](
+        name="product_stylist",
+        model="o4-mini",
+        instructions=lambda wrapper, agent: f"""
+## Product Stylist Agent Instructions
+You are a fashion product stylist. Based on the provided user information below, generate a search query that can be used to find products matching the user's request.
+
+### User Information:
+- Positive styles: {wrapper.context.positive_styles}
+- Negative styles: {wrapper.context.negative_styles}
+- Positive brands: {wrapper.context.positive_brands}
+- Negative brands: {wrapper.context.negative_brands}
+- Positive colors: {wrapper.context.positive_colors}
+- Negative colors: {wrapper.context.negative_colors}
+- Gender: {wrapper.context.gender}
+
+### Guidelines:
+- Analyze the user's request and extract key details that can be used to search for products.
+- Consider the user's preferences, style, occasion, season, and any other relevant information.
+- Generate a search query that includes the user's preferences and style.
+- The search query should be concise and focused on finding products that match the user's request.
+        """,
+        output_type=ProductStylistResponse,
+    )
+
+    product_evaluator_agent = Agent[StylistServiceContext](
+        name="product_evaluator",
+        model="gpt-4o",
+        instructions=lambda wrapper, agent: f"""
+## Product Evaluator Agent Instructions
+You are a fashion product evaluator. Your task is to evaluate products based on the user's preferences and style.
+### Guidelines:
+- Evaluate each product against the target request based on the following criteria:
+  - Style coherence
+  - Brand alignment
+  - Occasion suitability
+  - Color harmony
+  - Overall aesthetic appeal
+  - User's preferences (positive/negative styles, brands, colors)
+  - Budget considerations (if applicable)
+- For each product, provide a score from 0 to 10, where 0 means the product does not match the request at all and 10 means it is a perfect match.
+- Provide a short 1 sentence reasoning for your score.
+### User Information:
+- Positive styles: {wrapper.context.positive_styles}
+- Negative styles: {wrapper.context.negative_styles}
+- Positive brands: {wrapper.context.positive_brands}
+- Negative brands: {wrapper.context.negative_brands}
+- Positive colors: {wrapper.context.positive_colors}
+- Negative colors: {wrapper.context.negative_colors}
+""",
+        output_type=list[ProductEvaluation],
+    )
+
+    async def generate_outfit(self) -> Outfit:
+        with trace("Pierre_outfit_stylist"):
 
             # Initial conversation setup
             input: list[TResponseInputItem] = [{"content": self.context.user_prompt, "role": "user"}]
@@ -429,7 +522,113 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
                 # else:
                 #     print("Outfit evaluation failed. Stopping execution.")
                 #     return
-
                 break # skip evaluation for now, we can add it later
-
+        
         return self._convert_outfit_concept_to_outfit(outfit_concept)
+
+    async def determine_user_intent(self) -> str:
+        """
+        Determine the user's intent based on their prompt.
+        
+        This method uses the intent_agent to classify the user's request into
+        either "generate_outfit" or "find_products".
+        
+        Returns:
+            str: The determined user intent ("generate_outfit" or "find_products")        """
+        input: list[TResponseInputItem] = [{"content": self.context.user_prompt, "role": "user"}]
+        result = await Runner.run(self.intent_agent, input, context=self.context)
+        return result.final_output.intent
+
+    async def search_for_products(self) -> List[Product]:
+        """
+        Generate and find products based on user request.
+        
+        This method handles product search and discovery when the user's intent 
+        is to find specific products rather than generate complete outfits.
+        
+        Returns:
+            List[Product]: List of products matching the user's request
+        """
+
+        with trace("Pierre_product_stylist"):
+            input: list[TResponseInputItem] = [{"content": self.context.user_prompt, "role": "user"}]
+            product_shopper_result: RunResult = await Runner.run(self.product_stylist_agent, input, context=self.context)
+            shopper_result: ProductStylistResponse = product_shopper_result.final_output
+
+            # Create a temporary OutfitItem to use our existing product fetching logic
+            temp_item = OutfitItem(
+                search_query=shopper_result.search_query,
+                color=shopper_result.color, 
+                type=shopper_result.type, 
+                style=shopper_result.style, 
+                reasoning=""
+            )
+            
+            # Fetch products using existing infrastructure
+            item_to_products = await self._fetch_products([temp_item], 5 )
+            found_products = item_to_products.get(temp_item, [])
+            
+            if not found_products:
+                logger_service.info(f"No products found for search query: {shopper_result.search_query}")
+                return []
+
+            logger_service.debug(f"Found {len(found_products)} products for evaluation")
+
+            # Prepare input for product evaluation
+            evaluator_input = f"""
+    ## User Request:
+    {self.context.user_prompt}
+
+    ## Search Criteria:
+    - Search Query: {shopper_result.search_query}
+    - Color: {shopper_result.color}
+    - Brand: {shopper_result.brand}
+    - Style: {shopper_result.style}
+    - Type: {shopper_result.type}
+
+    ## Available Products:
+    - Title: {chr(10).join([f'''{i+1}. {p.title}
+    - Brand: {p.brand}
+    - Price: ${p.price}
+    - Description: {p.description[:200]}...'''
+    for i, p in enumerate(found_products)])}
+    """
+
+            # Evaluate products using the product evaluator agent
+            evaluation_result: RunResult = await Runner.run(self.product_evaluator_agent, evaluator_input, context=self.context)
+            evaluations: list[ProductEvaluation] = evaluation_result.final_output
+
+            # Sort evaluations by score (highest first) and filter out low scores
+            sorted_evaluations = sorted(evaluations, key=lambda x: x.score, reverse=True)
+            logger_service.debug(f"Sorted evaluations: {[f'{eval.product_title}: {eval.score}' for eval in sorted_evaluations]}")
+            high_scoring_evaluations = [eval for eval in sorted_evaluations if eval.score >= 6.0]  # Only products with score 6 or higher
+
+            logger_service.debug(f"Found {len(high_scoring_evaluations)} high-scoring products")
+
+            # Convert to Product models
+            result_products = []
+            for evaluation in high_scoring_evaluations:
+                # Find the matching product
+                matching_product = next((product for product in found_products if product.title == evaluation.product_title), None)
+                logger_service.debug(f"Matching product: {evaluation.product_title} with score {evaluation.score}")
+                if matching_product:
+                    # Convert SearchProduct to Product model
+                    product = Product(
+                        id=matching_product.id,
+                        type=shopper_result.type,
+                        title=matching_product.title,
+                        brand=matching_product.brand,
+                        price=matching_product.price,
+                        link=matching_product.link,
+                        images=matching_product.images,
+                        description=matching_product.description,
+                        search_query=shopper_result.search_query,
+                        points=1, # Default points for single product
+                        color=shopper_result.color,
+                        style=shopper_result.style
+                    )
+                    result_products.append(product)
+
+            logger_service.info(f"Returning {len(result_products)} evaluated products")
+            return result_products
+

@@ -196,7 +196,7 @@ async def search_outfits(
     try:
         logger_service.info(f"Searching outfits with query: {query}, page: {page}, page_size: {page_size}")
 
-        result = database_service.search_outfits(
+        result = await database_service.search_outfits(
             query=query,
             page=page,
             page_size=page_size

@@ -100,7 +100,6 @@ class ImageService:
                     break
                 else:
                     logger_service.error("No inline data found in the response candidate.")
-                    logger_service.debug(f"Candidate content: {candidate.content}")
                     
                     # Write the response to a text file for debugging
                     error_file_name = f"error_response_{uuid.uuid4().hex}.txt"

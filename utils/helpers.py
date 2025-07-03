@@ -95,7 +95,7 @@ def get_product_details(product):
         images=[img.get("link") for img in product_details.get("media", []) if img.get("link")],
     )
 
-def search_products(query: str) -> list[SearchProduct]:
+def search_products(query: str, num_results: int = 3) -> list[SearchProduct]:
     """
     Search for a product using in Google Shopping given a query
     """
@@ -125,7 +125,7 @@ def search_products(query: str) -> list[SearchProduct]:
         # Submit all tasks
         future_to_product = {
             executor.submit(get_product_details, product): product
-            for product in shopping_results[:3]
+            for product in shopping_results[:num_results]
         }
         
         # Collect results as they complete
