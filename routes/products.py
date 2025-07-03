@@ -4,7 +4,7 @@ import uuid
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from utils.models import User
-from utils.auth import get_current_user
+from utils.auth import verify_token
 from services.db import get_database_service, DatabasePaginatedResponse, DatabaseProduct, DatabaseLikeResponse, DatabaseService
 from services.logger import get_logger_service
 
@@ -68,7 +68,7 @@ async def get_products(
     page: int = Query(1, ge=1, description="Page number (starting from 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of products per page"),
     include_likes: bool = Query(True, description="Include user likes in response"),
-    current_user: User = Depends(get_current_user),  # just to ensure user is authenticated, not used in this endpoint
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ):
     """
@@ -78,12 +78,13 @@ async def get_products(
     Supports filtering by product type and brand.
     """
     try:
+        user_id = auth.get("user_id")
         logger_service.info(f"Fetching products - Page: {page}, Size: {page_size}")
         
         result: DatabasePaginatedResponse[DatabaseProduct] = await database_service.get_products(
             page=page,
             page_size=page_size,
-            user_id=current_user.id,
+            user_id=user_id,
             include_likes=include_likes
         )
 
@@ -98,7 +99,7 @@ async def search_products(
     query: str = Query(..., description="Search query for products"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
-    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ):
     """
@@ -120,7 +121,7 @@ async def search_products(
         # Use OR conditions to search multiple fields with ILIKE for case-insensitive partial matching
         search_conditions = f"title.ilike.%{query}%,type.ilike.%{query}%,color.ilike.%{query}%,style.ilike.%{query}%,description.ilike.%{query}%,brand.ilike.%{query}%,search_query.ilike.%{query}%"
         search_query = search_query.or_(search_conditions)
-                
+
         # Execute search with pagination and ordering
         result = await search_query.order("created_at", desc=True).range(
             offset, offset + page_size - 1
@@ -174,7 +175,7 @@ async def search_products(
 @router.post("/products/{product_id}/like", response_model=DatabaseLikeResponse)
 async def like_product(
     product_id: str,
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabaseLikeResponse:
     """
@@ -194,8 +195,9 @@ async def like_product(
         HTTPException: If product not found or like operation fails
     """
     try:
+        user_id = auth.get("user_id")
         # Use the database service to handle the like operation
-        result: DatabaseLikeResponse = await database_service.like_product(user_id=current_user.id, product_id=product_id)
+        result: DatabaseLikeResponse = await database_service.like_product(user_id=user_id, product_id=product_id)
         return result
         
     except HTTPException:
@@ -210,7 +212,7 @@ async def like_product(
 @router.post("/products/{product_id}/dislike", response_model=DatabaseLikeResponse)
 async def dislike_product(
     product_id: str,
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabaseLikeResponse:
     """
@@ -230,8 +232,9 @@ async def dislike_product(
         HTTPException: If product not found or unlike operation fails
     """
     try:
+        user_id = auth.get("user_id")
         # Use the database service to handle the unlike operation
-        result: DatabaseLikeResponse = await database_service.dislike_product(user_id=current_user.id, product_id=product_id)
+        result: DatabaseLikeResponse = await database_service.dislike_product(user_id=user_id, product_id=product_id)
         return result
 
     except HTTPException:
@@ -247,7 +250,7 @@ async def dislike_product(
 async def get_liked_products(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token),
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseProduct]:
     """
@@ -265,10 +268,11 @@ async def get_liked_products(
         HTTPException: If database operation fails
     """
     try:
-        logger_service.info(f"Fetching liked products for user {current_user.id} - Page: {page}, Size: {page_size}")
+        user_id = auth.get("user_id")
+        logger_service.info(f"Fetching liked products for user {user_id} - Page: {page}, Size: {page_size}")
 
         result: DatabasePaginatedResponse[DatabaseProduct] = await database_service.get_liked_products(
-            user_id=current_user.id,
+            user_id=user_id,
             page=page,
             page_size=page_size
         )

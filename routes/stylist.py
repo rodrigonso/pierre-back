@@ -10,14 +10,12 @@ from utils.models import User
 from utils.auth import get_current_user
 from services.image import get_image_service
 from services.logger import get_logger_service
-from services.auth import get_auth_service
 from utils.helpers import SearchProduct
 
 # Create router for stylist endpoints
 router = APIRouter()
 
 # Initialize auth service
-auth_service = get_auth_service()
 logger_service = get_logger_service()
 image_service = get_image_service()
 

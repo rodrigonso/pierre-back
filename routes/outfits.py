@@ -6,7 +6,7 @@ from datetime import datetime
 import uuid
 
 from utils.models import User
-from utils.auth import get_current_user
+from utils.auth import verify_token
 from services.db import get_database_service, DatabasePaginatedResponse, DatabaseSimilarityResponse, DatabaseLikeResponse, DatabaseOutfit, DatabaseProduct, DatabaseService
 from services.logger import get_logger_service
 
@@ -76,7 +76,7 @@ async def get_outfits(
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
     include_products: bool = Query(False, description="Include associated products in the response"),
     include_likes: bool = Query(True, description="Include like counts in the response"),
-    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseOutfit]:
     """
@@ -96,18 +96,19 @@ async def get_outfits(
         HTTPException: If database operation fails
     """
     try:
+        user_id = auth.get("user_id")
         logger_service.info(f"Retrieving outfits with pagination: page={page}, page_size={page_size}, include_products={include_products}")
 
         if include_products:
             result: DatabasePaginatedResponse = await database_service.get_outfits_with_products(
-                user_id=current_user.id,
+                user_id=user_id,
                 page=page,
                 page_size=page_size,
                 include_likes=include_likes
             )
         else:
             result: DatabasePaginatedResponse = await database_service.get_outfits(
-                user_id=current_user.id,
+                user_id=user_id,
                 page=page,
                 page_size=page_size,
                 include_likes=include_likes
@@ -126,7 +127,7 @@ async def get_liked_outfits(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
     include_products: bool = Query(False, description="Include associated products in the response"),
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseOutfit]:
     """
@@ -145,15 +146,16 @@ async def get_liked_outfits(
         HTTPException: If database operation fails
     """
     try:
+        user_id = auth.get("user_id")
         if include_products:
             result: DatabasePaginatedResponse[DatabaseOutfit] = await database_service.get_liked_outfits_with_products(
-                user_id=current_user.id,
+                user_id=user_id,
                 page=page,
                 page_size=page_size,
             )
         else:
             result: DatabasePaginatedResponse[DatabaseOutfit] = await database_service.get_liked_outfits(
-                user_id=current_user.id,
+                user_id=user_id,
                 page=page,
                 page_size=page_size,
             )
@@ -171,7 +173,7 @@ async def search_outfits(
     query: str = Query(..., description="Search query for outfits"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
-    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseOutfit]:
     """
@@ -230,7 +232,7 @@ async def get_outfit(
     outfit_id: int,
     include_products: bool = Query(False, description="Include associated products in the response"),
     include_likes: bool = Query(True, description="Include like counts in the response"),
-    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> Optional[DatabaseOutfit]:
     """
@@ -247,12 +249,13 @@ async def get_outfit(
     """
     try:
 
+        user_id = auth.get("user_id")
         logger_service.info(f"Retrieving outfit with ID: {outfit_id}, include_products: {include_products}")
 
         if include_products:
-            outfit_data: DatabaseOutfit = await database_service.get_outfit_with_products(outfit_id, user_id=current_user.id, include_likes=include_likes)
+            outfit_data: DatabaseOutfit = await database_service.get_outfit_with_products(outfit_id, user_id=user_id, include_likes=include_likes)
         else:
-            outfit_data: DatabaseOutfit = await database_service.get_outfit(outfit_id, user_id=current_user.id, include_likes=include_likes)
+            outfit_data: DatabaseOutfit = await database_service.get_outfit(outfit_id, user_id=user_id, include_likes=include_likes)
 
         if not outfit_data:
             raise HTTPException(
@@ -273,7 +276,7 @@ async def get_outfit(
 @router.post("/outfits/", response_model=OperationOutfitResponse)
 async def create_outfit(
     request: OutfitCreateRequest,
-    current_user: User = Depends(get_current_user), # just to ensure user is authenticated
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> OperationOutfitResponse:
     """
@@ -351,7 +354,7 @@ async def create_outfit(
 @router.post("/outfits/{outfit_id}/like", response_model=DatabaseLikeResponse)
 async def like_outfit(
     outfit_id: int,
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabaseLikeResponse:
     """
@@ -371,8 +374,9 @@ async def like_outfit(
         HTTPException: If outfit not found or like operation fails
     """
     try:
+        user_id = auth.get("user_id")
         # Use the database service to handle the like operation
-        result: DatabaseLikeResponse = await database_service.like_outfit(user_id=current_user.id, outfit_id=outfit_id)
+        result: DatabaseLikeResponse = await database_service.like_outfit(user_id=user_id, outfit_id=outfit_id)
         return result
     except HTTPException:
         raise
@@ -385,7 +389,7 @@ async def like_outfit(
 @router.post("/outfits/{outfit_id}/dislike", response_model=DatabaseLikeResponse)
 async def dislike_outfit(
     outfit_id: int,
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabaseLikeResponse:
     """
@@ -405,7 +409,8 @@ async def dislike_outfit(
         HTTPException: If outfit not found or unlike operation fails
     """
     try:
-        result: DatabaseLikeResponse = await database_service.dislike_outfit(user_id=current_user.id, outfit_id=outfit_id)
+        user_id = auth.get("user_id")
+        result: DatabaseLikeResponse = await database_service.dislike_outfit(user_id=user_id, outfit_id=outfit_id)
         return result
 
     except HTTPException:
@@ -425,7 +430,7 @@ async def get_similar_outfits(
     outfit_id: int,
     limit: int = Query(10, ge=1, le=50, description="Maximum number of similar outfits to return"),
     threshold: float = Query(0.7, ge=0.1, le=1.0, description="Minimum similarity threshold (0.1-1.0)"),
-    current_user: User = Depends(get_current_user),
+    auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabaseSimilarityResponse[DatabaseOutfit]:
     """

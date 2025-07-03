@@ -237,7 +237,7 @@ class StylistService:
 # ============= Agents ============
     analyst_agent = Agent[StylistServiceContext](
         name="analyst",
-        model="gpt-4o", 
+        model="gpt-4o-mini", 
         instructions=lambda wrapper, agent: f"""
 ## Analyst Agent Instructions
 You are an expert fashion analyst. Analyze the user's request, improve their prompt and extract outfit specific preferences that may be present in the user's prompt.
@@ -260,7 +260,7 @@ Pay special attention to:
 
     stylist_agent = Agent[StylistServiceContext](
         name="stylist",
-        model="o4-mini",
+        model="gpt-4o-mini",
         instructions=lambda wrapper, agent: f"""
 ## Stylist Agent Instructions
 You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
@@ -302,7 +302,7 @@ Apply this rule consistently to create harmonious, intentional outfits that look
 
     shopper_agent = Agent[StylistServiceContext](
         name="shopper",
-        model="gpt-4o",
+        model="gpt-4o-mini",
         instructions=lambda wrapper, agent: f"""
 ## Shopper Agent Instructions
 You are a fashion shopper. You are given an outfit item and a list of products that we found on the internet.
@@ -358,7 +358,7 @@ If the outfit meets the user's preferences, provide a positive evaluation and st
 
     intent_agent = Agent[StylistServiceContext](
         name="intent_classifier",
-        model="gpt-4o-mini",
+        model="gpt-4.1-nano",
         instructions=lambda wrapper, agent: f"""
 ## Intent Classification Instructions
 You are an AI assistant that classifies user fashion requests.
@@ -374,7 +374,7 @@ Respond with ONLY the intent classification: either "generate_outfit" or "find_p
 
     product_stylist_agent = Agent[StylistServiceContext](
         name="product_stylist",
-        model="o4-mini",
+        model="gpt-4.1-nano",
         instructions=lambda wrapper, agent: f"""
 ## Product Stylist Agent Instructions
 You are a fashion product stylist. Based on the provided user information below, generate a search query that can be used to find products matching the user's request.
@@ -405,7 +405,7 @@ For eg:
 
     product_evaluator_agent = Agent[StylistServiceContext](
         name="product_evaluator",
-        model="gpt-4o",
+        model="gpt-4.1-nano",
         instructions=lambda wrapper, agent: f"""
 ## Product Evaluator Agent Instructions
 You are a fashion product evaluator. Your task is to evaluate products based on the user's preferences and style.

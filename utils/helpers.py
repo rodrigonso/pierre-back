@@ -104,7 +104,7 @@ def search_products(query: str, num_results: int = 3) -> list[SearchProduct]:
         "engine": "google_shopping",
         "q": query,
         "api_key": os.getenv("SERPAPI_API_KEY"),
-        "num": 3,
+        "num": num_results,
         "hl": "en",
         "gl": "us",
         "location": "United States",
