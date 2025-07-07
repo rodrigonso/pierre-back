@@ -399,6 +399,9 @@ For eg:
 - When one element is very bold or statement-making it will count as 2 points
 - Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
 - Wedding rings and simple stud earrings are often considered "neutral" and may not count
+
+### Important:
+- The search query should be relevant to the user but also short to allow for search engines to return relevant results.
         """,
         output_type=ProductStylistResponse,
     )
@@ -546,7 +549,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
         result = await Runner.run(self.intent_agent, input, context=self.context)
         return result.final_output.intent
 
-    async def search_for_products(self, num_items: int) -> List[Product]:
+    async def search_for_products(self, num_items: int, evaluate_results: bool = False) -> List[Product]:
         """
         Generate and find products based on user request.
         
@@ -583,6 +586,28 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
                 return []
 
             logger_service.debug(f"Found {len(found_products)} products for evaluation")
+
+            # If we are not evaluating results, return the found products directly
+            if not evaluate_results:
+                logger_service.info(f"Returning {len(found_products)} products without evaluation")
+                # Convert SearchProduct to Product model
+                result_products = [
+                    Product(
+                        id=product.id,
+                        type=shopper_result.type,
+                        title=product.title,
+                        brand=product.brand,
+                        price=product.price,
+                        link=product.link,
+                        images=product.images,
+                        description=product.description,
+                        search_query=shopper_result.search_query,
+                        points=shopper_result.points,
+                        color=shopper_result.color,
+                        style=shopper_result.style
+                ) for product in found_products]
+                logger_service.info(f"Returning {len(result_products)} products")
+                return result_products
 
             # Create parallel evaluation tasks for each product
             evaluation_tasks = []

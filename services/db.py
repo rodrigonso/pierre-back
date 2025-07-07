@@ -1131,6 +1131,51 @@ class DatabaseService:
                 is_liked=False
             )
 
+    async def insert_product(self, product: DatabaseProduct) -> Dict[str, Any]:
+        """
+        Insert a new product into the database.
+        
+        Args:
+            product: DatabaseProduct model containing product information
+            
+        Returns:
+            Dict containing:
+                - success: Boolean indicating operation success
+                - product_id: ID of the created product
+                - message: Success or error message
+                
+        Raises:
+            Exception: If database operation fails
+        """
+        try:
+            # Convert Pydantic model to dict for Supabase
+            product_data = product.model_dump(exclude_unset=True)
+            
+            # Insert the product into the products table
+            result = await self.supabase.table("products").upsert(product_data, on_conflict="id").execute()
+
+            if not result.data:
+                raise Exception("Failed to insert product")
+                
+            product_id = result.data[0]["id"]
+            logger_service.success(f"Product {product_id} inserted successfully")
+            
+            return {
+                "success": True,
+                "product_id": product_id,
+                "message": f"Successfully created product {product.title or 'Unknown'}"
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to insert product: {str(e)}\nProduct data: {product.model_dump()}"
+            logger_service.error(error_msg)
+            return {
+                "success": False,
+                "product_id": None,
+                "message": error_msg
+            }
+        
+
 # === SEMANTIC EMBEDDING METHODS ===
     def _get_text_embedding(self, text: str) -> List[float]:
         """

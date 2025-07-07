@@ -142,6 +142,41 @@ async def _generate_single_outfit(stylist_service: StylistService, database_serv
     logger_service.success(f"Completed outfit #{outfit_number}: {outfit.name}")
     return outfit
 
+async def _save_products_to_db(products: List[Product], database_service: DatabaseService) -> List[str]:
+    """
+    Save a list of products to the database.
+    
+    Args:
+        products: List of Product objects to save
+        database_service: Database service for saving results
+        
+    Returns:
+        List of product IDs that were saved
+    """
+    product_ids = []
+    for product in products:
+        db_product = DatabaseProduct(
+            id=product.id,
+            type=product.type,
+            search_query=product.search_query,
+            points=product.points,
+            color=product.color,
+            link=product.link,
+            title=product.title,
+            price=product.price,
+            images=product.images,
+            brand=product.brand,
+            description=product.description,
+            style=product.style
+        )
+        result = await database_service.insert_product(db_product)
+        if result['success']:
+            product_ids.append(result['product_id'])
+        else:
+            logger_service.error(f"Failed to save product '{product.title}': {result['error']}")
+    
+    return product_ids
+
 @router.post("/stylist/request", response_model=StylistResponse)
 async def stylist_request(
     request: StylistRequest, 
@@ -210,8 +245,7 @@ async def stylist_request(
                 
                 if failed_count > 0:
                     logger_service.warning(f"Generated {len(successful_outfits)} outfits successfully, {failed_count} failed")
-                
-                # Create result message
+                  # Create result message
                 if len(successful_outfits) == 1:
                     result_message = f"Successfully generated outfit: {successful_outfits[0].name}"
                 else:
@@ -232,8 +266,12 @@ async def stylist_request(
 
         elif intent == "find_products":
             logger_service.info("Routing to product search")
-            products: List[Product] = await stylist_service.search_for_products(15)
-            
+            products: List[Product] = await stylist_service.search_for_products(40, evaluate_results=False)
+
+            # Save products to database in background (non-blocking)
+            asyncio.create_task(_save_products_to_db(products, database_service))
+            logger_service.info(f"Started background task to save {len(products)} products to database")
+
             return StylistResponse(
                 user_prompt=request.prompt,
                 intent=intent,

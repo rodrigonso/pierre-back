@@ -121,7 +121,7 @@ def search_products(query: str, num_results: int = 3) -> list[SearchProduct]:
     
     # Get product details in parallel
     products = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         # Submit all tasks
         future_to_product = {
             executor.submit(get_product_details, product): product
