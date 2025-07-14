@@ -250,7 +250,6 @@ Pay special attention to:
 - Occasion (work, date, party, casual, etc.)
 - Season/weather considerations
 - Color preferences
-- Budget hints
 
 ### Known user information:
 - Gender: {wrapper.context.gender}
@@ -260,7 +259,7 @@ Pay special attention to:
 
     stylist_agent = Agent[StylistServiceContext](
         name="stylist",
-        model="gpt-4o-mini",
+        model="gpt-4o",
         instructions=lambda wrapper, agent: f"""
 ## Stylist Agent Instructions
 You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
@@ -463,8 +462,14 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
                 for item in outfit_concept.items:
                     products = item_to_products[item]
                     logger_service.debug(f"Evaluating products for item {item.search_query}: {[p.title for p in products]}")
-
                     # Create input that includes both item and products
+                    products_formatted = "\n".join([
+                        f"""### {i+1}. {p.title}
+- **Brand:** {p.brand}
+- **Price:** ${p.price}
+- **Description:** {p.description[:100]}{'...' if len(p.description) > 100 else ''}
+""" for i, p in enumerate(products)])
+
                     shopper_input = f"""
 ## Target Outfit Item:
 - Search Query: {item.search_query}
@@ -472,10 +477,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
 - Type: {item.type}
 
 ## Available Products:
-{chr(10).join([f'''{p.title}
-- Brand: {p.brand}
-- Price: ${p.price}''' for p in products])}
-
+{products_formatted}
 """
 
                     task = Runner.run(self.shopper_agent, shopper_input, context=self.context)

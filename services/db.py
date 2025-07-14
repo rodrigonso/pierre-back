@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import os
 import uuid
+import re
 from datetime import datetime
 import numpy as np
 from openai import OpenAI
@@ -415,7 +416,6 @@ class DatabaseService:
                 page_size=page_size,
                 success=True
             )
-
         except Exception as e:
             error_msg = f"Failed to retrieve user liked outfits with products: {str(e)}"
             logger_service.error(error_msg)
@@ -427,17 +427,19 @@ class DatabaseService:
                 success=False
             )
 
-    async def search_outfits(self, query: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def search_outfits(self, query: str, page: int = 1, page_size: int = 10, threshold: float = 0.5) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
-        Search outfits based on name, style, description, and user prompt with pagination.
+        Search outfits based on semantic similarity to the query using OpenAI embeddings.
         
-        This method performs a text search across outfit fields using PostgreSQL ILIKE 
-        for case-insensitive partial matching. Results include associated products.
+        This method uses OpenAI embeddings to compute semantic similarity between the search query
+        and outfit prompts, providing more intelligent matching than simple text-based searches.
+        Results are ranked by similarity score and include associated products.
         
         Args:
-            query: Search query string to match against outfit content
+            query: Search query string to find semantically similar outfits
             page: Page number for pagination (default is 1)
             page_size: Number of outfits to return per page (default is 10)
+            threshold: Minimum similarity score threshold (0.0 to 1.0, default: 0.6)
             
         Returns:
             DatabasePaginatedResponse containing DatabaseOutfit objects with pagination applied
@@ -446,64 +448,90 @@ class DatabaseService:
             ValueError: If query is empty or too short
         """
         try:
-            # Validate query parameter
+            # Validate and normalize query parameter
             if not query or len(query.strip()) < 2:
                 logger_service.warning("Search query must be at least 2 characters long")
                 raise ValueError("Search query must be at least 2 characters long")
             
-            logger_service.info(f"Searching outfits with query: '{query}', page: {page}, page_size: {page_size}")
+            # Normalize the search query
+            normalized_query = self._normalize_search_query(query)
             
-            # Calculate offset for pagination
-            offset = (page - 1) * page_size
+            logger_service.info(f"Searching outfits with semantic similarity for query: '{normalized_query}' (original: '{query}'), page: {page}, page_size: {page_size}, threshold: {threshold}")
             
-            # Prepare search pattern for ILIKE (case-insensitive partial matching)
-            search_pattern = f"%{query.strip()}%"
-            logger_service.info(f"Search pattern: {search_pattern}, offset: {offset}, page_size: {page_size}")
-            
-            # Search outfits using PostgreSQL ILIKE for fuzzy text matching
-            # Search across name, style, description, and user_prompt fields
-            search_result = await self.supabase.table("outfits").select(
-                "*"
-            ).or_(
-                f"name.ilike.{search_pattern},"
-                f"style.ilike.{search_pattern},"
-                f"description.ilike.{search_pattern},"
-                f"user_prompt.ilike.{search_pattern}"
-            ).order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+            # Step 1: Get all outfits with user_prompt
+            all_outfits_result = await self.supabase.table("outfits").select("*").execute()
 
-            logger_service.info(f"Found {len(search_result.data)} outfits matching query")
-
-            # Get total count for pagination using the same search criteria
-            count_result = await self.supabase.table("outfits").select(
-                "id", count="exact"
-            ).or_(
-                f"name.ilike.{search_pattern},"
-                f"style.ilike.{search_pattern},"
-                f"description.ilike.{search_pattern},"
-                f"user_prompt.ilike.{search_pattern}"
-            ).execute()
+            if not all_outfits_result.data:
+                logger_service.info("No outfits found for search comparison")
+                return DatabasePaginatedResponse[DatabaseOutfit](
+                    data=[],
+                    total_count=0,
+                    page=page,
+                    page_size=page_size,
+                    success=True
+                )
             
-            total_count = count_result.count if count_result.count else 0
+            # Step 2: Get embedding for normalized search query
+            logger_service.debug(f"Generating embedding for normalized query: '{normalized_query}'") 
+            query_embedding = self._get_text_embedding(normalized_query)
             
-            # Convert raw outfit data to DatabaseOutfit objects with products
-            outfit_objects: List[DatabaseOutfit] = []
-            for outfit_data in search_result.data:
-                try:
-                    outfit_obj = DatabaseOutfit(**outfit_data)
-                    
-                    # Get associated products for each outfit
-                    outfit_obj.products = await self._get_outfit_products(outfit_obj.id)
-                    
-                    outfit_objects.append(outfit_obj)
-                except Exception as e:
-                    logger_service.error(f"Failed to convert outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
-                    # Continue processing other outfits instead of failing entirely
-                    continue
+            # Step 3: Filter outfits with user_prompt and get their embeddings
+            outfits_with_prompts = []
+            outfit_texts = []
 
-            logger_service.success(f"Successfully processed {len(outfit_objects)} outfit search results")
+            for outfit_data in all_outfits_result.data:
+                user_prompt = outfit_data.get("user_prompt", "")
+                if user_prompt and user_prompt.strip():
+                    outfits_with_prompts.append(outfit_data)
+                    outfit_texts.append(user_prompt)
+            
+            if not outfit_texts:
+                logger_service.info("No outfits with user prompts found for semantic search")
+                return DatabasePaginatedResponse[DatabaseOutfit](
+                    data=[],
+                    total_count=0,
+                    page=page,
+                    page_size=page_size,
+                    success=True
+                )
+            
+            # Get batch embeddings for efficiency
+            outfit_embeddings = self._get_batch_text_embeddings(outfit_texts)
+            
+            # Step 4: Calculate similarities and filter by threshold
+            matching_outfits = []
+            
+            for i, (outfit_data, embedding) in enumerate(zip(outfits_with_prompts, outfit_embeddings)):
+                similarity_score = self._cosine_similarity(query_embedding, embedding)
+
+                if similarity_score >= threshold:
+                    try:
+                        outfit_obj = DatabaseOutfit(**outfit_data)
+                        # Store similarity score as a custom attribute
+                        outfit_obj.__dict__['similarity_score'] = similarity_score
+                        matching_outfits.append((similarity_score, outfit_obj))
+                    except Exception as e:
+                        logger_service.error(f"Failed to convert outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
+                        continue
+            
+            # Step 5: Sort by similarity score (highest first)
+            matching_outfits.sort(key=lambda x: x[0], reverse=True)
+            
+            # Step 6: Apply pagination to the sorted results
+            total_count = len(matching_outfits)
+            start_index = (page - 1) * page_size
+            end_index = start_index + page_size
+            paginated_outfits = [outfit for _, outfit in matching_outfits[start_index:end_index]]
+            
+            # Step 7: Enrich with products
+            for outfit in paginated_outfits:
+                outfit.products = await self._get_outfit_products(outfit.id)
+            
+            success_msg = f"Found {total_count} outfits matching query '{query}' with similarity >= {threshold}"
+            logger_service.success(success_msg)
 
             return DatabasePaginatedResponse[DatabaseOutfit](
-                data=outfit_objects,
+                data=paginated_outfits,
                 total_count=total_count,
                 page=page,
                 page_size=page_size,
@@ -618,7 +646,8 @@ class DatabaseService:
             logger_service.error(error_msg)
             return {
                 "success": False,
-                "outfit_id": None,            "inserted_products": [],
+                "outfit_id": None,
+                "inserted_products": [],
                 "message": error_msg
             }
 
@@ -1244,7 +1273,6 @@ class DatabaseService:
             dot_product = np.dot(a, b)
             norm_a = np.linalg.norm(a)
             norm_b = np.linalg.norm(b)
-            
             if norm_a == 0 or norm_b == 0:
                 return 0.0
             
@@ -1253,6 +1281,50 @@ class DatabaseService:
             # Ensure result is between 0 and 1
             return max(0.0, min(1.0, similarity))
             
+        except Exception as e:
+            logger_service.error(f"Failed to calculate cosine similarity: {str(e)}")
+            return 0.0
+
+    def _normalize_search_query(self, query: str) -> str:
+        """
+        Normalize a search query for better matching consistency.
+        
+        This method performs the following normalizations:
+        - Convert to lowercase
+        - Strip leading/trailing whitespace
+        - Replace multiple consecutive spaces with single spaces
+        - Remove special characters that don't add semantic value
+        
+        Args:
+            query: Raw search query string
+            
+        Returns:
+            Normalized query string
+        """
+        try:
+            import re
+            
+            if not query:
+                return ""
+            
+            # Convert to lowercase and strip whitespace
+            normalized = query.lower().strip()
+            
+            # Replace multiple consecutive whitespace with single spaces
+            normalized = re.sub(r'\s+', ' ', normalized)
+            
+            # Remove extra punctuation that doesn't add semantic value
+            # Keep basic punctuation like apostrophes, hyphens, and periods
+            normalized = re.sub(r'[^\w\s\'-.]', ' ', normalized)
+            
+            # Clean up any double spaces created by punctuation removal
+            normalized = re.sub(r'\s+', ' ', normalized)
+            
+            # Final strip
+            normalized = normalized.strip()
+            
+            logger_service.debug(f"Normalized query '{query}' to '{normalized}'")
+            return normalized
         except Exception as e:
             logger_service.error(f"Failed to calculate cosine similarity: {str(e)}")
             return 0.0
@@ -1312,6 +1384,100 @@ class DatabaseService:
         except Exception as e:
             logger_service.error(f"Failed to retrieve products for outfit {outfit_id}: {str(e)}")
             return None
+
+    async def search_products(self, query: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseProduct]:
+        """
+        Search products using PostgreSQL ilike operator on the search_query column.
+        
+        This method performs a case-insensitive text search using PostgreSQL's ilike operator
+        on the search_query column, allowing for pattern matching and partial text searches.
+        
+        Args:
+            query: Search query string to match against product search_query column
+            page: Page number for pagination (default is 1)
+            page_size: Number of products to return per page (default is 10)
+            
+        Returns:
+            DatabasePaginatedResponse containing DatabaseProduct objects with pagination applied
+            
+        Raises:
+            ValueError: If query is empty or too short
+        """
+        try:
+            # Validate query parameter
+            if not query or len(query.strip()) < 2:
+                logger_service.warning("Search query must be at least 2 characters long")
+                raise ValueError("Search query must be at least 2 characters long")
+
+            # Prepare the search pattern for ilike (case-insensitive like)
+            search_pattern = f"%{query.strip()}%"
+            
+            logger_service.info(f"Searching products using ilike for pattern: '{search_pattern}', page: {page}, page_size: {page_size}")
+
+            # Calculate offset for pagination
+            offset = (page - 1) * page_size
+
+            # Step 1: Search products using ilike on search_query column with pagination
+            products_result = await self.supabase.table("products").select("*").ilike(
+                "search_query", search_pattern
+            ).range(offset, offset + page_size - 1).execute()
+
+            # Step 2: Get total count for pagination
+            count_result = await self.supabase.table("products").select(
+                "id", count="exact"
+            ).ilike("search_query", search_pattern).execute()
+            
+            total_count = count_result.count if count_result.count else 0
+
+            # Step 3: Convert raw product data to DatabaseProduct objects
+            product_objects = []
+            for product_data in products_result.data:
+                try:
+                    # Handle potential missing fields with default values
+                    product_obj = DatabaseProduct(
+                        id=product_data["id"],
+                        type=product_data.get("type", ""),
+                        search_query=product_data.get("search_query", ""),
+                        link=product_data.get("link", ""),
+                        title=product_data.get("title", ""),
+                        price=float(product_data.get("price", 0)) if product_data.get("price") else 0.0,
+                        images=product_data.get("images", []),
+                        brand=product_data.get("brand", ""),
+                        description=product_data.get("description", ""),
+                        color=product_data.get("color", ""),
+                        points=int(product_data.get("points", 0)) if product_data.get("points") else 0,
+                        style=product_data.get("style", "")
+                    )
+                    product_objects.append(product_obj)
+                except Exception as e:
+                    logger_service.error(f"Failed to convert product {product_data.get('id')} to DatabaseProduct: {str(e)}")
+                    # Continue processing other products instead of failing entirely
+                    continue
+
+            success_msg = f"Found {total_count} products matching query '{query}'"
+            logger_service.success(success_msg)
+
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=product_objects,
+                total_count=total_count,
+                page=page,
+                page_size=page_size,
+                success=True
+            )
+
+        except ValueError:
+            # Re-raise validation errors as-is
+            raise
+        except Exception as e:
+            error_msg = f"Failed to search products: {str(e)}"
+            logger_service.error(error_msg)
+            return DatabasePaginatedResponse[DatabaseProduct](
+                data=[],
+                total_count=0,
+                page=page,
+                page_size=page_size,
+                success=False
+            )
 
 # Create a singleton instance for use across the application
 db_service = DatabaseService()

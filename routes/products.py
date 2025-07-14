@@ -94,79 +94,62 @@ async def get_products(
         logger_service.error(f"Failed to retrieve products: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve products: {str(e)}")
 
-@router.get("/products/search/", response_model=SearchProductsResponse)
+@router.get("/products/search/", response_model=DatabasePaginatedResponse[DatabaseProduct])
 async def search_products(
     query: str = Query(..., description="Search query for products"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
     auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
-):
+) -> DatabasePaginatedResponse[DatabaseProduct]:
     """
-    Search products by query string with pagination
+    Search products using PostgreSQL ilike operator on the search_query column.
     
-    Searches across product titles, descriptions, brands, and search queries.
-    Returns matching products ordered by relevance and creation date.
+    This endpoint performs a case-insensitive text search using PostgreSQL's ilike operator
+    on the search_query column, allowing for pattern matching and partial text searches.
+    
+    Args:
+        query: Search query string to match against product search_query column
+        page: Page number (starting from 1)
+        page_size: Number of products per page (max 100)
+        
+    Returns:
+        DatabasePaginatedResponse: List of matching products with pagination info
+        
+    Raises:
+        HTTPException: If database operation fails or query is invalid
     """
     try:
-        logger_service.info(f"Searching products for query: '{query}' - Page: {page}, Size: {page_size}")
-        
-        # Calculate offset for pagination
-        offset = (page - 1) * page_size
-        
-        # Build search query using PostgreSQL text search
-        # Search across title, description, brand, and search_query fields
-        search_query = database_service.supabase.table("products").select("*")
-        
-        # Use OR conditions to search multiple fields with ILIKE for case-insensitive partial matching
-        search_conditions = f"title.ilike.%{query}%,type.ilike.%{query}%,color.ilike.%{query}%,style.ilike.%{query}%,description.ilike.%{query}%,brand.ilike.%{query}%,search_query.ilike.%{query}%"
-        search_query = search_query.or_(search_conditions)
+        logger_service.info(f"Searching products using ilike for query: '{query}', page: {page}, page_size: {page_size}")
 
-        # Execute search with pagination and ordering
-        result = await search_query.order("created_at", desc=True).range(
-            offset, offset + page_size - 1
-        ).execute()
-        
-        # Get total count for pagination (with same search conditions)
-        count_query = database_service.supabase.table("products").select("id", count="exact")
-        count_query = count_query.or_(search_conditions)
-        
-        count_result = await count_query.execute()
-        total_count = count_result.count if count_result.count else 0
-        
-        # Convert results to ProductData models
-        products = []
-        for product_data in result.data:
-            product = ProductData(
-                id=product_data["id"],
-                title=product_data.get("title"),
-                brand=product_data.get("brand"),
-                points=product_data.get("points"),
-                style=product_data.get("style"),
-                color=product_data.get("color"),
-                type=product_data.get("type"),
-                price=product_data.get("price"),
-                description=product_data.get("description"),
-                images=product_data.get("images", []),
-                link=product_data.get("link"),
-                search_query=product_data.get("search_query"),
-            )
-            products.append(product)
-        
-        logger_service.success(f"Found {len(products)} products matching query '{query}'")
-        
-        return SearchProductsResponse(
+        result = await database_service.search_products(
             query=query,
-            products=products,
-            total_count=total_count,
             page=page,
-            page_size=page_size,
-            success=True
+            page_size=page_size
         )
-        
+
+        if not result.success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to search products"
+            )
+
+        logger_service.success(f"Found {len(result.data)} products matching query '{query}'")
+        return result
+
+    except ValueError as e:
+        # Handle validation errors from the database service
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger_service.error(f"Failed to search products: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to search products: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to search products: {str(e)}"
+        )
 
 # ============================================================================
 # LIKE/DISLIKE ENDPOINTS

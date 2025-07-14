@@ -53,4 +53,4 @@ if __name__ == "__main__":
     import uvicorn
     # Only enable reload in development mode
     is_development = os.getenv("ENVIRONMENT", "development").lower() == "development"
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=is_development, workers=30)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=is_development, workers=12)
