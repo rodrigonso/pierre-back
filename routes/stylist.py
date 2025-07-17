@@ -30,7 +30,6 @@ class StylistResponse(BaseModel):
     success: bool = True
     data: List[Outfit | Product] = []
 
-
 def _convert_outfit_to_database_models(outfit: Outfit):
     """
     Convert an OutfitConcept to DatabaseOutfit and DatabaseProduct models.
@@ -134,7 +133,11 @@ async def _generate_single_outfit(stylist_service: StylistService, database_serv
     
     # Generate image for the outfit
     outfit.image_url = await _generate_outfit_image(outfit)
-    
+
+    if (not outfit.image_url):
+        logger_service.error(f"Failed to generate image for outfit #{outfit_number}: {outfit.name}")
+        raise Exception(f"Failed to generate image for outfit #{outfit_number}: {outfit.name}")
+
     # Save to database
     outfit_id = await _save_outfit_to_db(outfit, database_service)
     outfit.id = outfit_id
@@ -238,14 +241,15 @@ async def stylist_request(
                         failed_count += 1
                     else:
                         successful_outfits.append(result)
-                
+
                 if not successful_outfits:
                     # All outfit generations failed
                     raise Exception(f"Failed to generate any outfits. {failed_count} out of {num_items} failed.")
-                
+
                 if failed_count > 0:
                     logger_service.warning(f"Generated {len(successful_outfits)} outfits successfully, {failed_count} failed")
-                  # Create result message
+
+                # Create result message
                 if len(successful_outfits) == 1:
                     result_message = f"Successfully generated outfit: {successful_outfits[0].name}"
                 else:

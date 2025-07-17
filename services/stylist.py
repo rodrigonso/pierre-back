@@ -175,7 +175,8 @@ class StylistService:
         # Create async tasks that run the synchronous search_products in the thread pool
         async def fetch_single_item(item: OutfitItem) -> tuple[OutfitItem, list[Product]]:
             try:
-                search_query = f"{item.search_query} {item.color} {item.type} {self.context.gender}"
+                # search_query = f"{item.search_query} {item.color} {item.type} {self.context.gender}"
+                search_query = f"{item.search_query}"
                 # Run the blocking search_products function in a thread pool
                 products = await loop.run_in_executor(None, search_products, search_query, num_results)
                 return item, products
@@ -295,6 +296,7 @@ Apply this rule consistently to create harmonious, intentional outfits that look
 ## Important:
 - Do NOT fill out the `products` field, it will be filled later by the shopper agent.
 - When giving points to the items, add a 1 sentence reasoning for the points you give in the `reasoning` field.
+- In each item's search_query, include the color, type, gender, and style to ensure accurate product matching.
         """,
         output_type=OutfitConcept,
     )
@@ -389,9 +391,8 @@ You are a fashion product stylist. Based on the provided user information below,
 
 ### Guidelines:
 - Analyze the user's request and extract key details that can be used to search for products.
-- Consider the user's preferences, style, occasion, season, and any other relevant information.
-- Generate a search query that includes the user's preferences and style.
-- The search query should be concise and focused on finding products that match the user's request.
+- Consider the user's preferences, gender, style, occasion, season, and any other relevant information.
+- Generate a search query that is optimized for finding products that match the user's request.
 - Determine how many points the item should have given the 7-point rule:
 
 For eg:
@@ -399,8 +400,8 @@ For eg:
 - Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
 - Wedding rings and simple stud earrings are often considered "neutral" and may not count
 
-### Important:
-- The search query should be relevant to the user but also short to allow for search engines to return relevant results.
+### Anatomy of good search queries
+- <user's search query> + <color> + <type> + <gender> + <style> + <brands>
         """,
         output_type=ProductStylistResponse,
     )
