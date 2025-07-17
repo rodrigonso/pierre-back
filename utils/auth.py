@@ -82,7 +82,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             positive_styles=profile.get("positive_styles", []),
             negative_styles=profile.get("negative_styles", []),
             positive_colors=profile.get("positive_colors", []),
-            negative_colors=profile.get("negative_colors", [])
+            negative_colors=profile.get("negative_colors", []),
+            invite_code_used=profile.get("invite_code_used")
         )
         
     except Exception as e:

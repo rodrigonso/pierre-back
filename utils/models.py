@@ -72,6 +72,8 @@ class User(BaseModel):
 
     positive_colors: List[str] = []
     negative_colors: List[str] = []
+    
+    invite_code_used: Optional[str] = None
 
 class UserProfile(BaseModel):
     user_id: str
