@@ -296,7 +296,7 @@ Apply this rule consistently to create harmonious, intentional outfits that look
 ## Important:
 - Do NOT fill out the `products` field, it will be filled later by the shopper agent.
 - When giving points to the items, add a 1 sentence reasoning for the points you give in the `reasoning` field.
-- In each item's search_query, include the color, type, gender, and style to ensure accurate product matching.
+- In each item's search_query, include the color, type, gender, style and brand to ensure accurate product matching.
         """,
         output_type=OutfitConcept,
     )

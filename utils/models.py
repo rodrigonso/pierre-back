@@ -1,6 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
+
+from services.db import DatabaseOutfit, DatabaseProduct
 
 class SellerInfo(BaseModel):
     seller_name: Optional[str] = None
@@ -85,3 +87,114 @@ class UserProfile(BaseModel):
     updated_at: Optional[datetime] = None
     user_metadata: Optional[dict] = None
     app_metadata: Optional[dict] = None
+
+# Collection Models
+class CollectionCreate(BaseModel):
+    """
+    Model for creating a new collection
+    
+    Attributes:
+        name: Name of the collection (1-100 characters)
+        description: Optional description for the collection
+    """
+    name: str = Field(..., min_length=1, max_length=100, description="Collection name")
+    description: Optional[str] = Field(None, max_length=500, description="Optional description")
+
+class CollectionUpdate(BaseModel):
+    """
+    Model for updating an existing collection
+    
+    Attributes:
+        name: Updated name of the collection
+        description: Updated description for the collection
+    """
+    name: Optional[str] = Field(None, min_length=1, max_length=100, description="Collection name")
+    description: Optional[str] = Field(None, max_length=500, description="Optional description")
+    image_b64: Optional[str] = None
+
+class CollectionItem(BaseModel):
+    """
+    Model for an item within a collection
+    
+    Attributes:
+        id: Unique identifier for the collection item
+        item_type: Type of item ('product' or 'outfit')
+        item_id: ID of the product or outfit
+        added_at: When the item was added to the collection
+    """
+    id: str
+    item_type: str = Field(..., pattern="^(product|outfit)$", description="Item type: product or outfit")
+    item_id: str
+    added_at: datetime
+
+class CollectionItemWithData(BaseModel):
+    """
+    Model for a collection item with actual product/outfit data included
+    
+    Attributes:
+        id: Unique identifier for the collection item
+        item_type: Type of item ('product' or 'outfit')
+        item_id: ID of the product or outfit
+        added_at: When the item was added to the collection
+        data: The actual product or outfit data
+    """
+    id: str
+    item_type: str = Field(..., pattern="^(product|outfit)$", description="Item type: product or outfit")
+    item_id: str
+    added_at: datetime
+    data: Optional[DatabaseProduct | DatabaseOutfit] = None  # Will contain product or outfit data
+
+class Collection(BaseModel):
+    """
+    Model for a complete collection with metadata
+    
+    Attributes:
+        id: Unique identifier for the collection
+        user_id: ID of the user who owns the collection
+        name: Name of the collection
+        description: Optional description
+        created_at: When the collection was created
+        updated_at: When the collection was last updated
+        item_count: Number of items in the collection
+    """
+    id: str
+    user_id: str
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    item_count: int = 0
+
+class CollectionWithItems(BaseModel):
+    """
+    Model for a collection with its items included
+    
+    Attributes:
+        id: Unique identifier for the collection
+        user_id: ID of the user who owns the collection
+        name: Name of the collection
+        description: Optional description
+        created_at: When the collection was created
+        updated_at: When the collection was last updated
+        items: List of items in the collection with actual data
+    """
+    id: str | int
+    user_id: str
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    items: List[CollectionItemWithData] = []
+
+class AddItemToCollection(BaseModel):
+    """
+    Model for adding an item to a collection
+    
+    Attributes:
+        item_type: Type of item to add ('product' or 'outfit')
+        item_id: ID of the product or outfit to add
+    """
+    item_type: str = Field(..., pattern="^(product|outfit)$", description="Item type: product or outfit")
+    item_id: str | int = Field(..., description="ID of the item to add")

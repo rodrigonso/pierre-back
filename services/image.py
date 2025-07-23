@@ -95,7 +95,7 @@ class ImageService:
 
                     file_name = f"{outfit.name}_{uuid.uuid4().hex}.png"
                     binary_data = candidate.content.parts[0].inline_data.data
-                    generated_image_url = await self.database_service.upload_image(file_name, binary_data)
+                    generated_image_url = await self.database_service.upload_image("generated-images", file_name, binary_data)
 
                     break
                 else:

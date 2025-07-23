@@ -7,7 +7,7 @@ import os
 load_dotenv()
 
 # Import route modules
-from routes import stylist, outfits, products, invite
+from routes import stylist, outfits, products, invite, collections
 
 # Create FastAPI app
 app = FastAPI(
@@ -30,6 +30,7 @@ app.include_router(stylist.router, prefix="/api")
 app.include_router(outfits.router, prefix="/api")
 app.include_router(products.router, prefix="/api")
 app.include_router(invite.router, prefix="/api")
+app.include_router(collections.router, prefix="/api")
 
 @app.get("/")
 async def root():

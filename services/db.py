@@ -905,6 +905,25 @@ class DatabaseService:
             )
 
 # === PRODUCTS CRUD OPERATIONS ===
+    async def get_product(self, product_id: str) -> Optional[DatabaseProduct]:
+        """
+        Retrieve a single product by its ID.
+
+        Args:
+            product_id: ID of the product to retrieve
+
+        Returns:
+            DatabaseProduct object if found, None otherwise
+        """
+        try:
+            result = await self.supabase.table("products").select("*").eq("id", product_id).execute()
+            if result.data:
+                return DatabaseProduct(**result.data[0])
+            return None
+        except Exception as e:
+            logger_service.error(f"Failed to retrieve product {product_id}: {str(e)}")
+            return None
+
     async def get_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = True) -> DatabasePaginatedResponse[DatabaseProduct]:
         """
         Retrieve a paginated list of products.
@@ -1330,20 +1349,32 @@ class DatabaseService:
             return 0.0
 
 # === STORAGE METHODS ===
-    async def upload_image(self, file_name: str, data: bytes) -> str:
+    async def upload_image(self, bucket: str, file_name: str, data: bytes) -> str:
         """
         Uploads a binary file to a Supabase storage bucket and returns the public URL.
+        If a file with the same name already exists, returns the existing file's public URL.
 
+        :param bucket: The name of the storage bucket.
         :param file_name: The name of the file to save in the bucket.
         :param data: The binary data of the file.
-        :return: The public URL of the uploaded file.
+        :return: The public URL of the uploaded (or existing) file.
         """
-        # Upload the file to the specified bucket
-        response = await self.supabase.storage.from_('generated-images').upload(file_name, data)
-        logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
+        try:
+            # Attempt to upload the file to the specified bucket
+            response = await self.supabase.storage.from_(bucket).upload(file_name, data)
+            logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
+        except Exception as upload_error:
+            # Check if the error is due to file already existing
+            error_message = str(upload_error).lower()
+            if any(keyword in error_message for keyword in ['already exists', 'duplicate', 'conflict', 'exists']):
+                logger_service.info(f"File {file_name} already exists in bucket {bucket}, returning existing public URL")
+            else:
+                # Re-raise if it's a different error
+                logger_service.error(f"Failed to upload file {file_name} to bucket {bucket}: {str(upload_error)}")
+                raise
 
-        # Generate the public URL for the uploaded file
-        public_url = await self.supabase.storage.from_('generated-images').get_public_url(file_name)
+        # Generate the public URL for the uploaded (or existing) file
+        public_url = await self.supabase.storage.from_(bucket).get_public_url(file_name)
         return public_url
 
 # === HELPER METHODS ===
