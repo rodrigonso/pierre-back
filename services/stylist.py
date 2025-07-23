@@ -451,7 +451,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
 
                 item_to_products: dict[OutfitItem, list[Product]] = {}
                 try:
-                    item_to_products = await self._fetch_products(outfit_concept.items)
+                    item_to_products = await self._fetch_products(outfit_concept.items, num_results=5)
                 except Exception as e:
                     logger_service.error(f"Error fetching products: {e}")
                     # If fetching products fails, we can either retry or break the loop
