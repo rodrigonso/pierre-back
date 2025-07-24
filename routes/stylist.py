@@ -270,7 +270,7 @@ async def stylist_request(
 
         elif intent == "find_products":
             logger_service.info("Routing to product search")
-            products: List[Product] = await stylist_service.search_for_products(40, evaluate_results=False)
+            products: List[Product] = await stylist_service.search_for_products(80, evaluate_results=False)
 
             # Save products to database in background (non-blocking)
             asyncio.create_task(_save_products_to_db(products, database_service))

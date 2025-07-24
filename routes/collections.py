@@ -253,8 +253,9 @@ async def update_collection(
         if collection_data.description is not None:
             update_data["description"] = collection_data.description
         if collection_data.image_b64:
-            update_data["image_url"] = await db_service.upload_image("collection-images", f"{collection_id}.png", base64.b64decode(collection_data.image_b64))
-        
+            decoded: bytes = base64.b64decode(collection_data.image_b64)
+            update_data["image_url"] = await db_service.upload_image("collection-images", f"{collection_id}.png", decoded)
+
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update")
         

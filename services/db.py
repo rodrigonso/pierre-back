@@ -157,13 +157,16 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve outfit {outfit_id}: {str(e)}")
             return None
 
-    async def get_outfits(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_outfits(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False, style: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve a paginated list of outfits from the database.
         
         Args:
             page: Page number for pagination (default is 1)
-            limit: Number of outfits to return per page (default is 10)
+            page_size: Number of outfits to return per page (default is 10)
+            user_id: User ID for like status (optional)
+            include_likes: Whether to include like status for the user
+            style: Filter outfits by style (optional)
             
         Returns:
             DatabasePaginatedResponse containing DatabaseOutfit objects with pagination applied
@@ -171,12 +174,39 @@ class DatabaseService:
         try:
             offset = (page - 1) * page_size
 
+            # Build the base query
             if include_likes and user_id:
-                outfits = await self.supabase.table("outfits").select("*, user_outfit_likes!left(outfit_id)").eq("user_outfit_likes.user_id", user_id).order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+                query = self.supabase.table("outfits").select("*, user_outfit_likes!left(outfit_id)").eq("user_outfit_likes.user_id", user_id)
             else:
-                outfits = await self.supabase.table("outfits").select("*").order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+                query = self.supabase.table("outfits").select("*")
+            
+            # Apply style filter if provided (supports comma-separated values with OR logic)
+            if style:
+                style_values = [s.strip().lower() for s in style.split(',') if s.strip()]
+                if len(style_values) == 1:
+                    # Single value - use simple ilike for case-insensitive matching
+                    query = query.ilike("style", f"%{style_values[0]}%")
+                elif len(style_values) > 1:
+                    # Multiple values - use OR logic
+                    style_conditions = ",".join([f'style.ilike.%{style_val}%' for style_val in style_values])
+                    query = query.or_(style_conditions)
+            
+            # Execute query with pagination and ordering
+            outfits = await query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
 
-            count_result = await self.supabase.table("outfits").select("id", count="exact").execute()
+            # Get total count with same filters applied
+            count_query = self.supabase.table("outfits").select("id", count="exact")
+            if style:
+                style_values = [s.strip().lower() for s in style.split(',') if s.strip()]
+                if len(style_values) == 1:
+                    # Single value - use simple ilike for case-insensitive matching
+                    count_query = count_query.ilike("style", f"%{style_values[0]}%")
+                elif len(style_values) > 1:
+                    # Multiple values - use OR logic
+                    style_conditions = ",".join([f'style.ilike.%{style_val}%' for style_val in style_values])
+                    count_query = count_query.or_(style_conditions)
+            
+            count_result = await count_query.execute()
             total_count = count_result.count if count_result.count else 0
 
             # Convert raw outfit data to DatabaseOutfit objects
@@ -215,13 +245,16 @@ class DatabaseService:
                 success=False
             )
 
-    async def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False, style: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits along with their associated products with pagination.
 
         Args:
             page: Page number (starting from 1)
             page_size: Number of outfits per page
+            user_id: User ID for like status (optional)
+            include_likes: Whether to include like status for the user
+            style: Filter outfits by style (optional)
 
         Returns:
             DatabasePaginatedResponse containing:
@@ -233,13 +266,27 @@ class DatabaseService:
         try:
             offset = (page - 1) * page_size
             
+            # Build the base query
             if include_likes and user_id:
-                # Get outfits with pagination and user likes
-                outfits = await self.supabase.table("outfits").select(
+                query = self.supabase.table("outfits").select(
                     "*, user_outfit_likes!left(outfit_id)"
-                ).eq("user_outfit_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+                ).eq("user_outfit_likes.user_id", user_id)
             else:
-                outfits = await self.supabase.table("outfits").select("*").range(offset, offset + page_size - 1).execute()
+                query = self.supabase.table("outfits").select("*")
+            
+            # Apply style filter if provided (supports comma-separated values with OR logic)
+            if style:
+                style_values = [s.strip().lower() for s in style.split(',') if s.strip()]
+                if len(style_values) == 1:
+                    # Single value - use simple ilike for case-insensitive matching
+                    query = query.ilike("style", f"%{style_values[0]}%")
+                elif len(style_values) > 1:
+                    # Multiple values - use OR logic
+                    style_conditions = ",".join([f'style.ilike.%{style_val}%' for style_val in style_values])
+                    query = query.or_(style_conditions)
+            
+            # Execute query with pagination
+            outfits = await query.range(offset, offset + page_size - 1).execute()
 
             if not outfits.data:
                 return DatabasePaginatedResponse[DatabaseOutfit](
@@ -250,8 +297,19 @@ class DatabaseService:
                     success=True
                 )
             
-            # Get total count for pagination
-            count_result = await self.supabase.table("outfits").select("id", count="exact").execute()
+            # Get total count with same filters applied
+            count_query = self.supabase.table("outfits").select("id", count="exact")
+            if style:
+                style_values = [s.strip().lower() for s in style.split(',') if s.strip()]
+                if len(style_values) == 1:
+                    # Single value - use simple ilike for case-insensitive matching
+                    count_query = count_query.ilike("style", f"%{style_values[0]}%")
+                elif len(style_values) > 1:
+                    # Multiple values - use OR logic
+                    style_conditions = ",".join([f'style.ilike.%{style_val}%' for style_val in style_values])
+                    count_query = count_query.or_(style_conditions)
+            
+            count_result = await count_query.execute()
             total_count = count_result.count if count_result.count else 0
             
             # Convert raw outfit data to DatabaseOutfit objects
@@ -427,7 +485,7 @@ class DatabaseService:
                 success=False
             )
 
-    async def search_outfits(self, query: str, page: int = 1, page_size: int = 10, threshold: float = 0.5) -> DatabasePaginatedResponse[DatabaseOutfit]:
+    async def search_outfits(self, query: str, page: int = 1, page_size: int = 10, threshold: float = 0.5, style: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Search outfits based on semantic similarity to the query using OpenAI embeddings.
         
@@ -440,6 +498,7 @@ class DatabaseService:
             page: Page number for pagination (default is 1)
             page_size: Number of outfits to return per page (default is 10)
             threshold: Minimum similarity score threshold (0.0 to 1.0, default: 0.6)
+            style: Filter results by style (optional)
             
         Returns:
             DatabasePaginatedResponse containing DatabaseOutfit objects with pagination applied
@@ -456,10 +515,21 @@ class DatabaseService:
             # Normalize the search query
             normalized_query = self._normalize_search_query(query)
             
-            logger_service.info(f"Searching outfits with semantic similarity for query: '{normalized_query}' (original: '{query}'), page: {page}, page_size: {page_size}, threshold: {threshold}")
+            logger_service.info(f"Searching outfits with semantic similarity for query: '{normalized_query}' (original: '{query}'), page: {page}, page_size: {page_size}, threshold: {threshold}, style: {style}")
             
-            # Step 1: Get all outfits with user_prompt
-            all_outfits_result = await self.supabase.table("outfits").select("*").execute()
+            # Step 1: Get all outfits with user_prompt, applying style filter if provided
+            outfit_query = self.supabase.table("outfits").select("*")
+            if style:
+                style_values = [s.strip().lower() for s in style.split(',') if s.strip()]
+                if len(style_values) == 1:
+                    # Single value - use simple ilike for case-insensitive matching
+                    outfit_query = outfit_query.ilike("style", f"%{style_values[0]}%")
+                elif len(style_values) > 1:
+                    # Multiple values - use OR logic
+                    style_conditions = ",".join([f'style.ilike.%{style_val}%' for style_val in style_values])
+                    outfit_query = outfit_query.or_(style_conditions)
+            
+            all_outfits_result = await outfit_query.execute()
 
             if not all_outfits_result.data:
                 logger_service.info("No outfits found for search comparison")
@@ -924,13 +994,17 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve product {product_id}: {str(e)}")
             return None
 
-    async def get_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = True) -> DatabasePaginatedResponse[DatabaseProduct]:
+    async def get_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = True, brand: Optional[str] = None, type: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseProduct]:
         """
-        Retrieve a paginated list of products.
+        Retrieve a paginated list of products with optional filtering.
 
         Args:
             page: Page number (starting from 1)
             page_size: Number of products per page
+            user_id: User ID for including like information
+            include_likes: Whether to include user likes in the response
+            brand: Optional filter by brand name (case-insensitive)
+            type: Optional filter by product type (case-insensitive)
 
         Returns:
             DatabasePaginatedResponse containing:
@@ -944,13 +1018,45 @@ class DatabaseService:
             # Calculate offset for pagination
             offset = (page - 1) * page_size
 
+            # Build the base query
             if include_likes and user_id:
-                result = await self.supabase.table("products").select("*, user_product_likes!left(product_id)").eq("user_product_likes.user_id", user_id).range(offset, offset + page_size - 1).execute()
+                query = self.supabase.table("products").select("*, user_product_likes!left(product_id)").eq("user_product_likes.user_id", user_id)
+                count_query = self.supabase.table("products").select("id", count="exact")
             else:
-                result = await self.supabase.table("products").select("*").range(offset, offset + page_size - 1).execute()
+                query = self.supabase.table("products").select("*")
+                count_query = self.supabase.table("products").select("id", count="exact")
 
-            # Get total count for pagination
-            count_result = await self.supabase.table("products").select("id", count="exact").execute()
+            # Apply brand filter if provided (supports comma-separated values with OR logic)
+            if brand:
+                brand_values = [b.strip().lower() for b in brand.split(',') if b.strip()]
+                if len(brand_values) == 1:
+                    # Single value - use simple ilike
+                    query = query.ilike("brand", f"%{brand_values[0]}%")
+                    count_query = count_query.ilike("brand", f"%{brand_values[0]}%")
+                elif len(brand_values) > 1:
+                    # Multiple values - use OR logic
+                    brand_conditions = ",".join([f'brand.ilike.%{brand_val}%' for brand_val in brand_values])
+                    query = query.or_(brand_conditions)
+                    count_query = count_query.or_(brand_conditions)
+
+            # Apply type filter if provided (supports comma-separated values with OR logic)
+            if type:
+                type_values = [t.strip().lower() for t in type.split(',') if t.strip()]
+                if len(type_values) == 1:
+                    # Single value - use simple ilike
+                    query = query.ilike("type", f"%{type_values[0]}%")
+                    count_query = count_query.ilike("type", f"%{type_values[0]}%")
+                elif len(type_values) > 1:
+                    # Multiple values - use OR logic
+                    type_conditions = ",".join([f'type.ilike.%{type_val}%' for type_val in type_values])
+                    query = query.or_(type_conditions)
+                    count_query = count_query.or_(type_conditions)
+
+            # Execute the main query with pagination
+            result = await query.range(offset, offset + page_size - 1).execute()
+
+            # Get total count with the same filters
+            count_result = await count_query.execute()
             total_count = count_result.count if count_result.count else 0
 
             # Convert raw product data to DatabaseProduct objects
@@ -1361,8 +1467,9 @@ class DatabaseService:
         """
         try:
             # Attempt to upload the file to the specified bucket
-            response = await self.supabase.storage.from_(bucket).upload(file_name, data)
+            response = await self.supabase.storage.from_(bucket).upload(file_name, data, file_options={"contentType": "image/png"})
             logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
+
         except Exception as upload_error:
             # Check if the error is due to file already existing
             error_message = str(upload_error).lower()
@@ -1416,17 +1523,20 @@ class DatabaseService:
             logger_service.error(f"Failed to retrieve products for outfit {outfit_id}: {str(e)}")
             return None
 
-    async def search_products(self, query: str, page: int = 1, page_size: int = 10) -> DatabasePaginatedResponse[DatabaseProduct]:
+    async def search_products(self, query: str, page: int = 1, page_size: int = 10, brand: Optional[str] = None, type: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseProduct]:
         """
-        Search products using PostgreSQL ilike operator on the search_query column.
+        Search products using PostgreSQL ilike operator on the search_query column with optional filtering.
         
         This method performs a case-insensitive text search using PostgreSQL's ilike operator
         on the search_query column, allowing for pattern matching and partial text searches.
+        Can be combined with brand and type filters for more refined results.
         
         Args:
             query: Search query string to match against product search_query column
             page: Page number for pagination (default is 1)
             page_size: Number of products to return per page (default is 10)
+            brand: Optional filter by brand name (case-insensitive)
+            type: Optional filter by product type (case-insensitive)
             
         Returns:
             DatabasePaginatedResponse containing DatabaseProduct objects with pagination applied
@@ -1443,20 +1553,46 @@ class DatabaseService:
             # Prepare the search pattern for ilike (case-insensitive like)
             search_pattern = f"%{query.strip()}%"
             
-            logger_service.info(f"Searching products using ilike for pattern: '{search_pattern}', page: {page}, page_size: {page_size}")
+            logger_service.info(f"Searching products using ilike for pattern: '{search_pattern}', page: {page}, page_size: {page_size}, brand: {brand}, type: {type}")
 
             # Calculate offset for pagination
             offset = (page - 1) * page_size
 
-            # Step 1: Search products using ilike on search_query column with pagination
-            products_result = await self.supabase.table("products").select("*").ilike(
-                "search_query", search_pattern
-            ).range(offset, offset + page_size - 1).execute()
+            # Build the base query for products search
+            products_query = self.supabase.table("products").select("*").ilike("search_query", search_pattern)
+            count_query = self.supabase.table("products").select("id", count="exact").ilike("search_query", search_pattern)
 
-            # Step 2: Get total count for pagination
-            count_result = await self.supabase.table("products").select(
-                "id", count="exact"
-            ).ilike("search_query", search_pattern).execute()
+            # Apply brand filter if provided (supports comma-separated values with OR logic)
+            if brand:
+                brand_values = [b.strip().lower() for b in brand.split(',') if b.strip()]
+                if len(brand_values) == 1:
+                    # Single value - use simple ilike
+                    products_query = products_query.ilike("brand", f"%{brand_values[0]}%")
+                    count_query = count_query.ilike("brand", f"%{brand_values[0]}%")
+                elif len(brand_values) > 1:
+                    # Multiple values - use OR logic
+                    brand_conditions = ",".join([f'brand.ilike.%{brand_val}%' for brand_val in brand_values])
+                    products_query = products_query.or_(brand_conditions)
+                    count_query = count_query.or_(brand_conditions)
+
+            # Apply type filter if provided (supports comma-separated values with OR logic)
+            if type:
+                type_values = [t.strip().lower() for t in type.split(',') if t.strip()]
+                if len(type_values) == 1:
+                    # Single value - use simple ilike
+                    products_query = products_query.ilike("type", f"%{type_values[0]}%")
+                    count_query = count_query.ilike("type", f"%{type_values[0]}%")
+                elif len(type_values) > 1:
+                    # Multiple values - use OR logic
+                    type_conditions = ",".join([f'type.ilike.%{type_val}%' for type_val in type_values])
+                    products_query = products_query.or_(type_conditions)
+                    count_query = count_query.or_(type_conditions)
+
+            # Execute the search query with pagination
+            products_result = await products_query.range(offset, offset + page_size - 1).execute()
+
+            # Get total count with the same filters
+            count_result = await count_query.execute()
             
             total_count = count_result.count if count_result.count else 0
 

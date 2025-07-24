@@ -76,6 +76,7 @@ async def get_outfits(
     page_size: int = Query(10, ge=1, le=100, description="Number of items per page"),
     include_products: bool = Query(False, description="Include associated products in the response"),
     include_likes: bool = Query(True, description="Include like counts in the response"),
+    style: Optional[str] = Query(None, description="Filter outfits by style"),
     auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseOutfit]:
@@ -86,6 +87,8 @@ async def get_outfits(
         page: Page number (starting from 1)
         page_size: Number of outfits per page (max 100)
         include_products: Whether to include associated products in the response
+        include_likes: Include like counts in the response
+        style: Filter outfits by style (optional)
         current_user: Authenticated user
         db_service: Database service dependency
         
@@ -97,21 +100,23 @@ async def get_outfits(
     """
     try:
         user_id = auth.get("user_id")
-        logger_service.info(f"Retrieving outfits with pagination: page={page}, page_size={page_size}, include_products={include_products}")
+        logger_service.info(f"Retrieving outfits with pagination: page={page}, page_size={page_size}, include_products={include_products}, style={style}")
 
         if include_products:
             result: DatabasePaginatedResponse = await database_service.get_outfits_with_products(
                 user_id=user_id,
                 page=page,
                 page_size=page_size,
-                include_likes=include_likes
+                include_likes=include_likes,
+                style=style
             )
         else:
             result: DatabasePaginatedResponse = await database_service.get_outfits(
                 user_id=user_id,
                 page=page,
                 page_size=page_size,
-                include_likes=include_likes
+                include_likes=include_likes,
+                style=style
             )
         
         return result
@@ -173,6 +178,7 @@ async def search_outfits(
     query: str = Query(..., description="Search query for outfits"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
+    style: Optional[str] = Query(None, description="Filter outfits by style"),
     auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseOutfit]:
@@ -181,12 +187,13 @@ async def search_outfits(
     
     This endpoint performs a text search across outfit titles, descriptions, and user prompts
     to find outfits that match the user's search query. The search is case-insensitive and
-    supports partial matching.
+    supports partial matching. Results can be filtered by style.
     
     Args:
         query: Search query string to match against outfit content
         page: Page number (starting from 1)
         page_size: Number of outfits per page (max 100)
+        style: Filter results by style (optional)
         current_user: Authenticated user
         
     Returns:
@@ -196,12 +203,13 @@ async def search_outfits(
         HTTPException: If database operation fails or query is invalid
     """
     try:
-        logger_service.info(f"Searching outfits with query: {query}, page: {page}, page_size: {page_size}")
+        logger_service.info(f"Searching outfits with query: {query}, page: {page}, page_size: {page_size}, style: {style}")
 
         result = await database_service.search_outfits(
             query=query,
             page=page,
-            page_size=page_size
+            page_size=page_size,
+            style=style
         )
 
         if not result.success:

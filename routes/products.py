@@ -68,6 +68,8 @@ async def get_products(
     page: int = Query(1, ge=1, description="Page number (starting from 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of products per page"),
     include_likes: bool = Query(True, description="Include user likes in response"),
+    brand: Optional[str] = Query(None, description="Filter products by brand name"),
+    type: Optional[str] = Query(None, description="Filter products by type"),
     auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ):
@@ -76,16 +78,31 @@ async def get_products(
     
     Returns a paginated list of all products in the database.
     Supports filtering by product type and brand.
+    
+    Args:
+        page: Page number (starting from 1)
+        page_size: Number of products per page (max 100)
+        include_likes: Include user likes information in response
+        brand: Optional filter by brand name (case-insensitive)
+        type: Optional filter by product type (case-insensitive)
+        
+    Returns:
+        DatabasePaginatedResponse[DatabaseProduct]: Paginated list of products
+        
+    Raises:
+        HTTPException: If database operation fails
     """
     try:
         user_id = auth.get("user_id")
-        logger_service.info(f"Fetching products - Page: {page}, Size: {page_size}")
+        logger_service.info(f"Fetching products - Page: {page}, Size: {page_size}, Brand: {brand}, Type: {type}")
         
         result: DatabasePaginatedResponse[DatabaseProduct] = await database_service.get_products(
             page=page,
             page_size=page_size,
             user_id=user_id,
-            include_likes=include_likes
+            include_likes=include_likes,
+            brand=brand,
+            type=type
         )
 
         return result
@@ -99,6 +116,8 @@ async def search_products(
     query: str = Query(..., description="Search query for products"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(10, ge=1, description="Number of items per page"),
+    brand: Optional[str] = Query(None, description="Filter products by brand name"),
+    type: Optional[str] = Query(None, description="Filter products by type"),
     auth = Depends(verify_token), # just to ensure user is authenticated
     database_service: DatabaseService = Depends(get_database_service)
 ) -> DatabasePaginatedResponse[DatabaseProduct]:
@@ -107,11 +126,14 @@ async def search_products(
     
     This endpoint performs a case-insensitive text search using PostgreSQL's ilike operator
     on the search_query column, allowing for pattern matching and partial text searches.
+    Can be combined with brand and type filters for more refined search results.
     
     Args:
         query: Search query string to match against product search_query column
         page: Page number (starting from 1)
         page_size: Number of products per page (max 100)
+        brand: Optional filter by brand name (case-insensitive)
+        type: Optional filter by product type (case-insensitive)
         
     Returns:
         DatabasePaginatedResponse: List of matching products with pagination info
@@ -120,12 +142,14 @@ async def search_products(
         HTTPException: If database operation fails or query is invalid
     """
     try:
-        logger_service.info(f"Searching products using ilike for query: '{query}', page: {page}, page_size: {page_size}")
+        logger_service.info(f"Searching products using ilike for query: '{query}', page: {page}, page_size: {page_size}, brand: {brand}, type: {type}")
 
         result = await database_service.search_products(
             query=query,
             page=page,
-            page_size=page_size
+            page_size=page_size,
+            brand=brand,
+            type=type
         )
 
         if not result.success:

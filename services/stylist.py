@@ -35,7 +35,7 @@ class OutfitItem:
     search_query: str
     color: str
     type: Literal["top", "bottom", "dress", "outerwear", "shoes", "accessories", "jewelry"]
-    style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty"]
+    style: Literal["casual", "formal", "boho", "streetwear", "minimalist", "vintage", "sporty", "chic"]
     reasoning: str
     points: int = 0
     product: Optional[SearchProduct] = None
@@ -297,6 +297,7 @@ Apply this rule consistently to create harmonious, intentional outfits that look
 - Do NOT fill out the `products` field, it will be filled later by the shopper agent.
 - When giving points to the items, add a 1 sentence reasoning for the points you give in the `reasoning` field.
 - In each item's search_query, include the color, type, gender, style and brand to ensure accurate product matching.
+- The outfit name should be unique and descriptive, reflecting the overall style and theme of the outfit.
         """,
         output_type=OutfitConcept,
     )
@@ -451,7 +452,7 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
 
                 item_to_products: dict[OutfitItem, list[Product]] = {}
                 try:
-                    item_to_products = await self._fetch_products(outfit_concept.items, num_results=5)
+                    item_to_products = await self._fetch_products(outfit_concept.items, num_results=10)
                 except Exception as e:
                     logger_service.error(f"Error fetching products: {e}")
                     # If fetching products fails, we can either retry or break the loop
