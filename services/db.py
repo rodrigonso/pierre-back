@@ -392,7 +392,8 @@ class DatabaseService:
                     try:
 
                         outfit_data = like_record["outfits"]
-                        outfit_obj = DatabaseOutfit(**outfit_data, is_liked=True)
+                        outfit_obj = DatabaseOutfit(**outfit_data)
+                        outfit_obj.is_liked = True # Safe to say outfit is liked..
                         outfit_objects.append(outfit_obj)
 
                     except Exception as e:
@@ -457,6 +458,7 @@ class DatabaseService:
                     try:
                         outfit_data = like_record["outfits"]
                         outfit_obj = DatabaseOutfit(**outfit_data)
+                        outfit_obj.is_liked = True # safe to assume it's liked
                         outfit_objects.append(outfit_obj)
                     except Exception as e:
                         logger_service.error(f"Failed to convert liked outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
