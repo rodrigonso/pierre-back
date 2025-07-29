@@ -1460,12 +1460,12 @@ class DatabaseService:
     async def upload_image(self, bucket: str, file_name: str, data: bytes) -> str:
         """
         Uploads a binary file to a Supabase storage bucket and returns the public URL.
-        If a file with the same name already exists, returns the existing file's public URL.
+        If a file with the same name already exists, it will be overwritten.
 
         :param bucket: The name of the storage bucket.
         :param file_name: The name of the file to save in the bucket.
         :param data: The binary data of the file.
-        :return: The public URL of the uploaded (or existing) file.
+        :return: The public URL of the uploaded file.
         """
         try:
             # Attempt to upload the file to the specified bucket
@@ -1473,16 +1473,27 @@ class DatabaseService:
             logger_service.info(f"Uploaded file {file_name} to Supabase storage with response: {response}")
 
         except Exception as upload_error:
-            # Check if the error is due to file already existing
+            # If upsert fails, try deleting the existing file first and then upload
             error_message = str(upload_error).lower()
             if any(keyword in error_message for keyword in ['already exists', 'duplicate', 'conflict', 'exists']):
-                logger_service.info(f"File {file_name} already exists in bucket {bucket}, returning existing public URL")
+                logger_service.info(f"File {file_name} already exists in bucket {bucket}, attempting to overwrite")
+                try:
+                    # Delete the existing file
+                    await self.supabase.storage.from_(bucket).remove([file_name])
+                    logger_service.info(f"Deleted existing file {file_name} from bucket {bucket}")
+                    
+                    # Upload the new file
+                    response = await self.supabase.storage.from_(bucket).upload(file_name, data, file_options={"contentType": "image/png"})
+                    logger_service.info(f"Successfully overwritten file {file_name} in bucket {bucket}")
+                except Exception as overwrite_error:
+                    logger_service.error(f"Failed to overwrite file {file_name} in bucket {bucket}: {str(overwrite_error)}")
+                    raise
             else:
                 # Re-raise if it's a different error
                 logger_service.error(f"Failed to upload file {file_name} to bucket {bucket}: {str(upload_error)}")
                 raise
 
-        # Generate the public URL for the uploaded (or existing) file
+        # Generate the public URL for the uploaded file
         public_url = await self.supabase.storage.from_(bucket).get_public_url(file_name)
         return public_url
 
