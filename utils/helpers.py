@@ -6,6 +6,8 @@ from pydantic import BaseModel
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from services.logger import get_logger_service
+import asyncio
+import aiohttp
 
 logger_service = get_logger_service()
 
@@ -69,21 +71,28 @@ def search_web(query: str) -> SearchWebResult:
             error_message=str(e)
         )
 
-def get_product_details(product):
+async def get_product_details_async(session: aiohttp.ClientSession, product) -> SearchProduct:
+    """Async version of get_product_details"""
     logger_service.info(f"Fetching rich product data for product: {product.get('title', 'Unknown')}")
 
     product_info_url = product.get("serpapi_product_api")
     if not product_info_url:
         raise ValueError(f"No product info URL found for product: {product.get('title', 'Unknown')}")
     
-    product_info = requests.get(product_info_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}')
-    product_info = product_info.json()
+    url = product_info_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}'
+    
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            product_info = await response.json()
+    except asyncio.TimeoutError:
+        logger_service.error(f"Timeout fetching product details for: {product.get('title', 'Unknown')}")
+        raise
+    except Exception as e:
+        logger_service.error(f"Error fetching product details: {e}")
+        raise
 
     product_details = product_info.get("product_results", {})
     product_seller = product_info.get("sellers_results", {}).get("online_sellers", [{}])[0]
-
-    logger_service.debug(f"Product details fetched: {product_details}")
-    logger_service.debug(f"Product seller details fetched: {product_seller}")
 
     return SearchProduct(
         id=product.get("product_id", ""),
@@ -95,11 +104,10 @@ def get_product_details(product):
         images=[img.get("link") for img in product_details.get("media", []) if img.get("link")],
     )
 
-def search_products(query: str, num_results: int = 3) -> list[SearchProduct]:
+async def search_products_async(query: str, num_results: int = 3) -> SearchProductsResult:
     """
-    Search for a product using in Google Shopping given a query
+    Async version of search_products that won't block FastAPI threads
     """
-
     params = {
         "engine": "google_shopping",
         "q": query,
@@ -113,28 +121,36 @@ def search_products(query: str, num_results: int = 3) -> list[SearchProduct]:
 
     logger_service.info(f"Searching for products with query: {query}")
 
+    # This could also be made async if GoogleSearch supports it
     search = GoogleSearch(params)
     results = search.get_dict()
     shopping_results = results.get("shopping_results", [])
+    # pagination = results.get("serpapi_pagination", {})
+
     if not shopping_results:
         raise ValueError(f"No shopping results found for query: {query}")
-    
-    # Get product details in parallel
-    products = []
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        # Submit all tasks
-        future_to_product = {
-            executor.submit(get_product_details, product): product
-            for product in shopping_results[:num_results]
-        }
-        
-        # Collect results as they complete
-        for future in as_completed(future_to_product):
-            try:
-                product = future.result()
-                products.append(product)
-            except Exception as exc:
-                product_data = future_to_product[future]
-                logger_service.error(f'Product {product_data.get("title", "Unknown")} generated an exception: {exc}')
 
-    return products
+    # Use async HTTP session for concurrent requests
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            get_product_details_async(session, product)
+            for product in shopping_results[:num_results]
+        ]
+
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        products = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                product_data = shopping_results[i]
+                logger_service.error(f'Product {product_data.get("title", "Unknown")} generated an exception: {result}')
+            else:
+                products.append(result)
+
+    return SearchProductsResult(
+        query=query,
+        products=products,
+        type="shopping",
+        success=True
+    )

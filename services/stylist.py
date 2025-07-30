@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.models import User
-from utils.helpers import SearchProduct, search_products
+from utils.helpers import SearchProduct, search_products_async, SearchProductsResult
 from services.logger import get_logger_service
 from openai import OpenAI
 import os
@@ -165,29 +165,27 @@ class StylistService:
     async def _fetch_products(self, items: list[OutfitItem], num_results: int = 3) -> dict[OutfitItem, list[Product]]:
         """
         Fetch products for each item in the outfit concept.
-        This function runs the blocking search_products calls in a thread pool
-        and properly awaits them to avoid blocking the FastAPI event loop.
+        This function uses the async search_products_async function to fetch products
+        for each outfit item concurrently without blocking the event loop.
         Returns a dictionary mapping items to their corresponding products.
         """
-        
-        loop = asyncio.get_event_loop()
-        
-        # Create async tasks that run the synchronous search_products in the thread pool
+
+        # Create async tasks that run the async search_products_async function
         async def fetch_single_item(item: OutfitItem) -> tuple[OutfitItem, list[Product]]:
             try:
                 # search_query = f"{item.search_query} {item.color} {item.type} {self.context.gender}"
                 search_query = f"{item.search_query}"
-                # Run the blocking search_products function in a thread pool
-                products = await loop.run_in_executor(None, search_products, search_query, num_results)
-                return item, products
+                # Run the async search_products_async function
+                result: SearchProductsResult = await search_products_async(search_query, num_results)
+                return item, result.products
             except Exception as exc:
                 logger_service.error(f'Item {item.search_query} generated an exception: {exc}')
                 return item, []  # Return empty list for failed searches
-        
+
         # Execute all tasks concurrently
         tasks = [fetch_single_item(item) for item in items]
         results_list = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Convert list of tuples back to dictionary
         results = {}
         for result in results_list:
@@ -196,7 +194,7 @@ class StylistService:
                 continue
             item, products = result
             results[item] = products
-            
+
         return results
 
     def _convert_outfit_concept_to_outfit(self, outfit_concept: OutfitConcept) -> Outfit:
@@ -223,7 +221,7 @@ class StylistService:
                     description=item.product.description
                 )
                 pydantic_products.append(pydantic_product)
-        
+
         return Outfit(
             id=None,
             points=outfit_concept.points,
