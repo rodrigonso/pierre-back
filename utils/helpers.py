@@ -82,7 +82,7 @@ async def get_product_details_async(session: aiohttp.ClientSession, product) -> 
     url = product_info_url + f'&api_key={os.getenv("SERPAPI_API_KEY")}'
     
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        async with session.get(url) as response:
             product_info = await response.json()
     except asyncio.TimeoutError:
         logger_service.error(f"Timeout fetching product details for: {product.get('title', 'Unknown')}")
@@ -138,7 +138,7 @@ async def search_products_async(query: str, num_results: int = 3) -> SearchProdu
         ]
 
         # Wait for all tasks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results: list[SearchProduct] = await asyncio.gather(*tasks, return_exceptions=True)
 
         products = []
         for i, result in enumerate(results):

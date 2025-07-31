@@ -9,6 +9,7 @@ from utils.helpers import SearchProduct, search_products_async, SearchProductsRe
 from services.logger import get_logger_service
 from openai import OpenAI
 import os
+from prompts import classifier, evaluator, product_stylist, shopper, stylist, analyst, product_evaluator
 
 logger_service = get_logger_service()
 
@@ -237,199 +238,48 @@ class StylistService:
     analyst_agent = Agent[StylistServiceContext](
         name="analyst",
         model="gpt-4o-mini", 
-        instructions=lambda wrapper, agent: f"""
-## Analyst Agent Instructions
-You are an expert fashion analyst. Analyze the user's request, improve their prompt and extract outfit specific preferences that may be present in the user's prompt.
-
-### Guidelines:
-Pay special attention to:
-
-- Style hints (minimalist, boho, streetwear, formal, casual, etc.)
-- Brand hints (Zara, Levis, Reformation, etc.)
-- Occasion (work, date, party, casual, etc.)
-- Season/weather considerations
-- Color preferences
-
-### Known user information:
-- Gender: {wrapper.context.gender}
-        """,
+        instructions=lambda wrapper, agent: analyst.get_prompt(wrapper.context),
         output_type=AnalystResult,
     )
 
     stylist_agent = Agent[StylistServiceContext](
         name="stylist",
         model="gpt-4o",
-        instructions=lambda wrapper, agent: f"""
-## Stylist Agent Instructions
-You are a fashion stylist. Based on the provided user information below, curate a personalized outfit concept that aligns with the user's preferences and style.
-
-When creating your outfit concepts, always apply the 7-point rule to ensure balanced and polished styling.
-This rule states that a person should wear no more than 7 visible elements or accessories at one time to avoid looking overdone or cluttered.
-Count these elements when styling:
-
-### Guidelines:
-
-- Aim for 5-7 total elements for a polished look
-- 3-4 elements work well for minimalist or casual styling
-- When one element is very bold or statement-making it will count as 2 points
-- Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
-- Wedding rings and simple stud earrings are often considered "neutral" and may not count
-
-### When creating outfits:
-
-- Always mentally count the styling elements in any outfit concept you create
-- If an outfit exceeds 7 points, consider a different combination
-
-Apply this rule consistently to create harmonious, intentional outfits that look effortlessly put-together rather than overdone.
-
-### Known user information:
-- Positive styles: {wrapper.context.positive_styles}
-- Negative styles: {wrapper.context.negative_styles}
-- Positive brands: {wrapper.context.positive_brands}
-- Negative brands: {wrapper.context.negative_brands}
-- Positive colors: {wrapper.context.positive_colors}
-- Negative colors: {wrapper.context.negative_colors}
-- Gender: {wrapper.context.gender}
-
-## Important:
-- Do NOT fill out the `products` field, it will be filled later by the shopper agent.
-- When giving points to the items, add a 1 sentence reasoning for the points you give in the `reasoning` field.
-- In each item's search_query, include the color, type, gender, style and brand to ensure accurate product matching.
-- The outfit name should be unique and descriptive, reflecting the overall style and theme of the outfit.
-        """,
+        instructions=lambda wrapper, agent: stylist.get_prompt(wrapper.context),
         output_type=OutfitConcept,
     )
 
     shopper_agent = Agent[StylistServiceContext](
         name="shopper",
         model="gpt-4o-mini",
-        instructions=lambda wrapper, agent: f"""
-## Shopper Agent Instructions
-You are a fashion shopper. You are given an outfit item and a list of products that we found on the internet.
-Your job is to evaluate the available products against the target outfit item and score them based on how well they match the item.
-
-### Guidelines:
-Evaluate each product against the target outfit item based on the following criteria:
-- Style coherence
-- Brand alignment
-- Occasion suitability
-- Color harmony
-- Overall aesthetic appeal
-- User's preferences (positive/negative styles, brands, colors)
-- Budget considerations (if applicable)
-- For each product, provide a score from 0 to 10, where 0 means the product does not match the item at all and 10 means it is a perfect match.
-- Provide a short 1 sentence reasoning for your score.
-
-### User Information:
-- Positive styles: {wrapper.context.positive_styles}
-- Negative styles: {wrapper.context.negative_styles}
-- Positive brands: {wrapper.context.positive_brands}
-- Negative brands: {wrapper.context.negative_brands}
-- Positive colors: {wrapper.context.positive_colors}
-- Negative colors: {wrapper.context.negative_colors}
-- Gender: {wrapper.context.gender}
-        """,
+        instructions=lambda wrapper, agent: shopper.get_prompt(wrapper.context),
         output_type=list[OutfitProductEvaluation],
     )
 
     evaluator_agent = Agent[StylistServiceContext](
         name="evaluator",
-        instructions="""
-## Evaluator Agent Instructions
-You are a fashion evaluator. Review the generated outfit and provide feedback.
-
-### Guidelines:
-Evaluate the outfit concept based on the following criteria:
-    - Style coherence
-    - Brand alignment
-    - Occasion suitability
-    - Color harmony
-    - Overall aesthetic appeal
-    - User's preferences (positive/negative styles, brands, colors)
-    - Budget considerations (if applicable)
-
-If the outfit meets the user's preferences, provide a positive evaluation and stop execution.
-
-### Important:
-- Your evaluation should be concise and brief.
-        """,
+        instructions=lambda wrapper, agent: evaluator.get_prompt(wrapper.context),
         output_type=EvaluationFeedback,
     )
 
     intent_agent = Agent[StylistServiceContext](
         name="intent_classifier",
         model="gpt-4.1-nano",
-        instructions=lambda wrapper, agent: f"""
-## Intent Classification Instructions
-You are an AI assistant that classifies user fashion requests.
-
-Analyze the user's message and determine their intent:
-- "generate_outfit": User wants a complete outfit created/styled for them
-- "find_products": User is looking for specific products or items
-
-Respond with ONLY the intent classification: either "generate_outfit" or "find_products".
-        """,
+        instructions=lambda wrapper, agent: classifier.get_prompt(wrapper.context),
         output_type=UserIntentResult,
     )
 
     product_stylist_agent = Agent[StylistServiceContext](
         name="product_stylist",
         model="gpt-4.1-nano",
-        instructions=lambda wrapper, agent: f"""
-## Product Stylist Agent Instructions
-You are a fashion product stylist. Based on the provided user information below, generate a search query that can be used to find products matching the user's request.
-
-### User Information:
-- Positive styles: {wrapper.context.positive_styles}
-- Negative styles: {wrapper.context.negative_styles}
-- Positive brands: {wrapper.context.positive_brands}
-- Negative brands: {wrapper.context.negative_brands}
-- Positive colors: {wrapper.context.positive_colors}
-- Negative colors: {wrapper.context.negative_colors}
-- Gender: {wrapper.context.gender}
-
-### Guidelines:
-- Analyze the user's request and extract key details that can be used to search for products.
-- Consider the user's preferences, gender, style, occasion, season, and any other relevant information.
-- Generate a search query that is optimized for finding products that match the user's request.
-- Determine how many points the item should have given the 7-point rule:
-
-For eg:
-- When one element is very bold or statement-making it will count as 2 points
-- Basic items like plain t-shirts, simple jeans, or neutral shoes typically count as 1 point
-- Wedding rings and simple stud earrings are often considered "neutral" and may not count
-
-### Anatomy of good search queries
-- <user's search query> + <color> + <type> + <gender> + <style> + <brands>
-        """,
+        instructions=lambda wrapper, agent: product_stylist.get_prompt(wrapper.context),
         output_type=ProductStylistResponse,
     )
 
     product_evaluator_agent = Agent[StylistServiceContext](
         name="product_evaluator",
         model="gpt-4.1-nano",
-        instructions=lambda wrapper, agent: f"""
-## Product Evaluator Agent Instructions
-You are a fashion product evaluator. Your task is to evaluate products based on the user's preferences and style.
-### Guidelines:
-- Evaluate each product against the target request based on the following criteria:
-  - Style coherence
-  - Brand alignment
-  - Occasion suitability
-  - Color harmony
-  - Overall aesthetic appeal
-  - User's preferences (positive/negative styles, brands, colors)
-  - Budget considerations (if applicable)
-- For each product, provide a score from 0 to 10, where 0 means the product does not match the request at all and 10 means it is a perfect match.
-- Provide a short 1 sentence reasoning for your score.
-### User Information:
-- Positive styles: {wrapper.context.positive_styles}
-- Negative styles: {wrapper.context.negative_styles}
-- Positive brands: {wrapper.context.positive_brands}
-- Negative brands: {wrapper.context.negative_brands}
-- Positive colors: {wrapper.context.positive_colors}
-- Negative colors: {wrapper.context.negative_colors}
-""",
+        instructions=lambda wrapper, agent: product_evaluator.get_prompt(wrapper.context),
         output_type=list[ProductEvaluation],
     )
 
@@ -440,8 +290,15 @@ You are a fashion product evaluator. Your task is to evaluate products based on 
             input: list[TResponseInputItem] = [{"content": self.context.user_prompt, "role": "user"}]
 
             analyst_result = await Runner.run(self.analyst_agent, input, context=self.context)
-            # Update the user input with the analyst's result
             input = self._update_input(analyst_result)
+
+            # Extend the context with the analyst's output without overriding existing values
+            self.context.positive_styles.extend(analyst_result.final_output.positive_styles)
+            self.context.negative_styles.extend(analyst_result.final_output.negative_styles)
+            self.context.positive_brands.extend(analyst_result.final_output.positive_brands)
+            self.context.negative_brands.extend(analyst_result.final_output.negative_brands)
+            self.context.positive_colors.extend(analyst_result.final_output.positive_colors)
+            self.context.negative_colors.extend(analyst_result.final_output.negative_colors)
 
             while True:
 
