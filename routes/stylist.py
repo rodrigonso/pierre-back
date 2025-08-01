@@ -1,8 +1,6 @@
 from fastapi import APIRouter, HTTPException, status, Depends
-from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
-import uuid
 import asyncio
 from services.stylist import StylistService, Outfit, Product
 from services.db import get_database_service, DatabaseService, DatabaseOutfit, DatabaseProduct
@@ -10,14 +8,16 @@ from utils.models import User
 from utils.auth import get_current_user
 from services.image import get_image_service
 from services.logger import get_logger_service
-from utils.helpers import SearchProduct
+from utils.subscription_middleware import require_pierre_access
+from services.subscription import get_subscription_service
 
 # Create router for stylist endpoints
 router = APIRouter()
 
-# Initialize auth service
+# Initialize services
 logger_service = get_logger_service()
 image_service = get_image_service()
+subscription_service = get_subscription_service()
 
 class StylistRequest(BaseModel):
     prompt: str
@@ -29,6 +29,46 @@ class StylistResponse(BaseModel):
     result: str
     success: bool = True
     data: List[Outfit | Product] = []
+    
+    # Subscription information for client
+    subscription_info: Optional[dict] = None
+
+def _build_subscription_info(user: User) -> dict:
+    """
+    Build subscription information for client response
+    
+    Args:
+        user: User object with subscription data
+        
+    Returns:
+        Dict with subscription information for client
+    """
+    remaining_requests = user.get_remaining_free_requests()
+    
+    subscription_info = {
+        "subscription_status": user.subscription_status,
+        "is_premium": user.subscription_status in ['premium', 'pro'],
+        "free_requests_used": user.free_requests_used,
+        "free_requests_limit": user.free_requests_limit,
+        "remaining_free_requests": remaining_requests,
+        "needs_upgrade": user.subscription_status == "free" and remaining_requests <= 1,
+        "upgrade_message": None
+    }
+    
+    # Add contextual messages based on remaining requests
+    if user.subscription_status == "free":
+        if remaining_requests == 0:
+            subscription_info["upgrade_message"] = "You've used all your free Pierre requests. Upgrade to continue getting AI styling recommendations!"
+        elif remaining_requests == 1:
+            subscription_info["upgrade_message"] = "This is your last free Pierre request. Upgrade for unlimited access!"
+        elif remaining_requests == 2:
+            subscription_info["upgrade_message"] = f"You have {remaining_requests} free Pierre requests remaining. Consider upgrading for unlimited access!"
+        else:
+            subscription_info["upgrade_message"] = f"You have {remaining_requests} free Pierre requests remaining."
+    else:
+        subscription_info["upgrade_message"] = f"You have unlimited Pierre requests with your {user.subscription_status} subscription."
+    
+    return subscription_info
 
 def _convert_outfit_to_database_models(outfit: Outfit):
     """
@@ -167,6 +207,7 @@ async def _save_products_to_db(products: List[Product], database_service: Databa
     return product_ids
 
 @router.post("/stylist/request", response_model=StylistResponse)
+@require_pierre_access("stylist_request")
 async def stylist_request(
     request: StylistRequest, 
     user: User = Depends(get_current_user),
@@ -230,6 +271,7 @@ async def stylist_request(
                     result=result_message,
                     success=True,
                     data=successful_outfits,
+                    subscription_info=_build_subscription_info(user)
                 )
 
             except Exception as e:
@@ -249,7 +291,8 @@ async def stylist_request(
                 intent=intent,
                 result=f"Found {len(products)} products matching your request",
                 success=True,
-                data=products
+                data=products,
+                subscription_info=_build_subscription_info(user)
             )
 
         else:
@@ -261,7 +304,8 @@ async def stylist_request(
                 intent="unknown",
                 result=f"error: Unclear intent '{intent}'",
                 success=True,
-                data=[]
+                data=[],
+                subscription_info=_build_subscription_info(user)
             )
 
     except HTTPException:

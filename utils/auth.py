@@ -17,20 +17,6 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("Missing Supabase configuration in environment variables")
 
-class User(BaseModel):
-    id: str
-    name: Optional[str] = None
-    gender: Optional[str] = None
-
-    positive_brands: List[str] = []
-    negative_brands: List[str] = []
-
-    positive_styles: List[str] = []
-    negative_styles: List[str] = []
-
-    positive_colors: List[str] = []
-    negative_colors: List[str] = []
-
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[User]:
     """
     Get the current authenticated user from a JWT token.
@@ -83,7 +69,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             negative_styles=profile.get("negative_styles", []),
             positive_colors=profile.get("positive_colors", []),
             negative_colors=profile.get("negative_colors", []),
-            invite_code_used=profile.get("invite_code_used")
+            invite_code_used=profile.get("invite_code_used"),
+            subscription_status=profile.get("subscription_status", "free"),
+            free_requests_used=profile.get("free_requests_used", 0),
+            free_requests_limit=profile.get("free_requests_limit", 4)
         )
         
     except Exception as e:

@@ -76,6 +76,23 @@ class User(BaseModel):
     negative_colors: List[str] = []
     
     invite_code_used: Optional[str] = None
+    
+    # Subscription and usage fields
+    subscription_status: str = "free"
+    free_requests_used: int = 0
+    free_requests_limit: int = 4
+    
+    def can_make_pierre_request(self) -> bool:
+        """Check if user can make a Pierre request based on subscription status"""
+        if self.subscription_status in ['premium', 'pro']:
+            return True
+        return self.free_requests_used < self.free_requests_limit
+    
+    def get_remaining_free_requests(self) -> int:
+        """Get number of remaining free requests"""
+        if self.subscription_status in ['premium', 'pro']:
+            return -1  # Unlimited
+        return max(0, self.free_requests_limit - self.free_requests_used)
 
 class UserProfile(BaseModel):
     user_id: str
