@@ -79,6 +79,7 @@ sse-starlette==2.3.6
 starlette==0.46.2
 storage3==0.11.3
 StrEnum==0.4.15
+stripe==11.4.0
 supabase==2.15.3
 supafunc==0.9.4
 tenacity==8.5.0

@@ -207,7 +207,7 @@ async def _save_products_to_db(products: List[Product], database_service: Databa
     return product_ids
 
 @router.post("/stylist/request", response_model=StylistResponse)
-@require_pierre_access("stylist_request")
+# @require_pierre_access("stylist_request") DISABLED FOR NOW...
 async def stylist_request(
     request: StylistRequest, 
     user: User = Depends(get_current_user),
