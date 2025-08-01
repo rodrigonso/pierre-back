@@ -121,9 +121,12 @@ async def search_products_async(query: str, num_results: int = 3) -> SearchProdu
 
     logger_service.info(f"Searching for products with query: {query}")
 
-    # This could also be made async if GoogleSearch supports it
-    search = GoogleSearch(params)
-    results = search.get_dict()
+    # Make the call below async to avoid blocking:
+    def search_products():
+        search = GoogleSearch(params)
+        return search.get_dict()
+
+    results = await asyncio.to_thread(search_products)
     shopping_results = results.get("shopping_results", [])
     # pagination = results.get("serpapi_pagination", {})
 

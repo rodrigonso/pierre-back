@@ -111,20 +111,6 @@ async def _save_outfit_to_db(outfit: Outfit, database_service: DatabaseService) 
     return save_result['outfit_id']
 
 async def _generate_single_outfit(stylist_service: StylistService, database_service: DatabaseService, outfit_number: int) -> Outfit:
-    """
-    Generate a single outfit with image and save to database.
-    
-    Args:
-        stylist_service: The stylist service instance
-        database_service: Database service for saving results
-        outfit_number: The outfit number for logging purposes
-        
-    Returns:
-        Outfit: Complete outfit with generated image and database ID
-        
-    Raises:
-        Exception: If outfit generation, image generation, or database save fails
-    """
     logger_service.info(f"Generating outfit #{outfit_number}")
     
     # Generate the outfit
@@ -186,24 +172,6 @@ async def stylist_request(
     user: User = Depends(get_current_user),
     database_service: DatabaseService = Depends(get_database_service)
 ):
-    """
-    Intelligent stylist endpoint that determines user intent and routes to appropriate method.
-    
-    This endpoint analyzes the user's prompt to determine whether they want:
-    - A complete outfit generated (generate_outfit)
-    - Specific products found (generate_products)
-    
-    Args:
-        request: StylistRequest containing the user's prompt
-        user: Authenticated user
-        database_service: Database service for saving results
-        
-    Returns:
-        StylistResponse: Contains intent classification and results
-        
-    Raises:
-        HTTPException: If processing fails
-    """
     try:
         logger_service.info(f"Processing intelligent stylist request for user: {user.id} with prompt: {request.prompt}")
         logger_service.debug(f"Provided user data: {user.model_dump()}")
@@ -227,14 +195,14 @@ async def stylist_request(
                 _generate_single_outfit(stylist_service, database_service, i + 1)
                 for i in range(num_items)
             ]
-            
+
             try:
                 outfits = await asyncio.gather(*outfit_tasks, return_exceptions=True)
-                
+
                 # Filter out any exceptions and collect successful outfits
                 successful_outfits = []
                 failed_count = 0
-                
+
                 for i, result in enumerate(outfits):
                     if isinstance(result, Exception):
                         logger_service.error(f"Failed to generate outfit #{i + 1}: {str(result)}")
@@ -255,7 +223,7 @@ async def stylist_request(
                 else:
                     outfit_names = [outfit.name for outfit in successful_outfits]
                     result_message = f"Successfully generated {len(successful_outfits)} outfits: {', '.join(outfit_names)}"
-                
+
                 return StylistResponse(
                     user_prompt=request.prompt,
                     intent=intent,
@@ -263,7 +231,7 @@ async def stylist_request(
                     success=True,
                     data=successful_outfits,
                 )
-                
+
             except Exception as e:
                 logger_service.error(f"Error during parallel outfit generation: {str(e)}")
                 raise
@@ -283,7 +251,7 @@ async def stylist_request(
                 success=True,
                 data=products
             )
-            
+
         else:
             # Fallback to outfit generation for unclear intent
             logger_service.error(f"Unclear intent '{intent}', defaulting to outfit generation")
