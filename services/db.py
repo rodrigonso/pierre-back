@@ -248,6 +248,7 @@ class DatabaseService:
     async def get_outfits_with_products(self, page: int = 1, page_size: int = 10, user_id: str = None, include_likes: bool = False, style: Optional[str] = None) -> DatabasePaginatedResponse[DatabaseOutfit]:
         """
         Retrieve all outfits along with their associated products with pagination.
+        OPTIMIZED: Uses a single query with joins to fetch outfits and products together.
 
         Args:
             page: Page number (starting from 1)
@@ -258,7 +259,7 @@ class DatabaseService:
 
         Returns:
             DatabasePaginatedResponse containing:
-                - data: List of DatabaseOutfit objects
+                - data: List of DatabaseOutfit objects with products pre-loaded
                 - total_count: Total number of outfits
                 - page: Current page number
                 - page_size: Number of outfits per page
@@ -266,13 +267,27 @@ class DatabaseService:
         try:
             offset = (page - 1) * page_size
             
-            # Build the base query
+            # OPTIMIZATION: Fetch outfits with products in a single query using joins
+            # This eliminates the N+1 query problem by getting all data at once
             if include_likes and user_id:
                 query = self.supabase.table("outfits").select(
-                    "*, user_outfit_likes!left(outfit_id)"
+                    """
+                    *,
+                    user_outfit_likes!left(outfit_id),
+                    product_outfit_junction(
+                        products(*)
+                    )
+                    """
                 ).eq("user_outfit_likes.user_id", user_id)
             else:
-                query = self.supabase.table("outfits").select("*")
+                query = self.supabase.table("outfits").select(
+                    """
+                    *,
+                    product_outfit_junction(
+                        products(*)
+                    )
+                    """
+                )
             
             # Apply style filter if provided (supports comma-separated values with OR logic)
             if style:
@@ -312,25 +327,38 @@ class DatabaseService:
             count_result = await count_query.execute()
             total_count = count_result.count if count_result.count else 0
             
-            # Convert raw outfit data to DatabaseOutfit objects
+            # OPTIMIZATION: Process outfit data with pre-loaded products
             outfit_objects: List[DatabaseOutfit] = []
             for outfit_data in outfits.data:
                 try:
-
+                    # Set like status
                     if include_likes and user_id:
                         outfit_data['is_liked'] = len(outfit_data.get("user_outfit_likes", [])) == 1
                     else:
                         outfit_data['is_liked'] = None
 
+                    # Extract and process products from the joined data
+                    products = []
+                    if outfit_data.get("product_outfit_junction"):
+                        for junction_item in outfit_data["product_outfit_junction"]:
+                            if junction_item.get("products"):
+                                try:
+                                    product_obj = DatabaseProduct(**junction_item["products"])
+                                    products.append(product_obj)
+                                except Exception as e:
+                                    logger_service.error(f"Failed to convert product to DatabaseProduct: {str(e)}")
+                                    continue
+                    
+                    # Remove junction data before creating outfit object
+                    outfit_data.pop("product_outfit_junction", None)
+                    
                     outfit_obj = DatabaseOutfit(**outfit_data)
+                    outfit_obj.products = products  # Pre-loaded products
                     outfit_objects.append(outfit_obj)
+                    
                 except Exception as e:
                     logger_service.error(f"Failed to convert outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
                     continue
-            
-            # Enrich outfits with their products
-            for outfit in outfit_objects:
-                outfit.products = await self._get_outfit_products(outfit.id)
 
             return DatabasePaginatedResponse[DatabaseOutfit](
                 data=outfit_objects,
@@ -433,12 +461,17 @@ class DatabaseService:
             DatabasePaginatedResponse containing DatabaseOutfit objects with pagination applied
         """
         try:
-            # Get liked outfits
+            # Get liked outfits with products in a single optimized query
             liked_outfits_result = await self.supabase.table("user_outfit_likes").select(
                 """
                 outfit_id,
                 created_at,
-                outfits (*)
+                outfits (
+                    *,
+                    product_outfit_junction(
+                        products(*)
+                    )
+                )
                 """
             ).eq("user_id", user_id).order("created_at", desc=True).range(
                 (page - 1) * page_size, page * page_size - 1
@@ -451,23 +484,36 @@ class DatabaseService:
 
             total_count = count_result.count if count_result.count else 0
 
-            # Convert raw outfit data to DatabaseOutfit objects
+            # OPTIMIZATION: Process liked outfits with pre-loaded products
             outfit_objects = []
             for like_record in liked_outfits_result.data:
                 if like_record.get("outfits"):
                     try:
                         outfit_data = like_record["outfits"]
+                        
+                        # Extract and process products from the joined data
+                        products = []
+                        if outfit_data.get("product_outfit_junction"):
+                            for junction_item in outfit_data["product_outfit_junction"]:
+                                if junction_item.get("products"):
+                                    try:
+                                        product_obj = DatabaseProduct(**junction_item["products"])
+                                        products.append(product_obj)
+                                    except Exception as e:
+                                        logger_service.error(f"Failed to convert product to DatabaseProduct: {str(e)}")
+                                        continue
+                        
+                        # Remove junction data before creating outfit object
+                        outfit_data.pop("product_outfit_junction", None)
+                        
                         outfit_obj = DatabaseOutfit(**outfit_data)
                         outfit_obj.is_liked = True # safe to assume it's liked
+                        outfit_obj.products = products  # Pre-loaded products
                         outfit_objects.append(outfit_obj)
                     except Exception as e:
                         logger_service.error(f"Failed to convert liked outfit {outfit_data.get('id')} to DatabaseOutfit: {str(e)}")
                         # Continue processing other outfits instead of failing entirely
                         continue
-
-            # Enrich outfits with their products
-            for outfit in outfit_objects:
-                outfit.products = await self._get_outfit_products(outfit.id)
 
             return DatabasePaginatedResponse[DatabaseOutfit](
                 data=outfit_objects,

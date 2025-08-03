@@ -9,8 +9,15 @@ from utils.models import User
 from pydantic import BaseModel
 import asyncio
 from collections import defaultdict, Counter
+import time
+from functools import lru_cache
 
 logger_service = get_logger_service()
+
+# OPTIMIZATION: In-memory cache for user profile data
+_profile_cache = {}
+_profile_cache_ttl = {}
+PROFILE_CACHE_DURATION = 300  # 5 minutes
 
 class RecommendationWeights(BaseModel):
     """
@@ -68,6 +75,7 @@ class RecommendationService:
     ) -> RecommendationResponse:
         """
         Get personalized outfit recommendations for a user.
+        OPTIMIZED: Uses caching and parallel processing for better performance.
         
         Args:
             user: User object with preferences and ID
@@ -82,12 +90,12 @@ class RecommendationService:
         try:
             logger_service.info(f"Generating recommendations for user {user.id}")
             
-            # Step 1: Gather user data for profiling
-            user_profile_data = await self._gather_user_profile_data(user, database_service)
+            # Step 1: Gather user data for profiling (with caching)
+            user_profile_data = await self._get_cached_user_profile_data(user, database_service)
             
             # Step 2: Get candidate outfits (exclude already liked if requested)
             candidates = await self._get_candidate_outfits(
-                user.id, database_service, exclude_liked, style_filter
+                user.id, database_service, exclude_liked, style_filter, user
             )
             
             if not candidates:
@@ -98,26 +106,10 @@ class RecommendationService:
                     user_profile_strength=0.0
                 )
             
-            # Step 3: Score each candidate outfit
-            scored_recommendations = []
-            for outfit in candidates:
-                try:
-                    score, reasoning, match_factors = await self._score_outfit_for_user(
-                        outfit, user, user_profile_data, database_service
-                    )
-                    
-                    if score > 0:  # Only include positive scores
-                        recommendation = OutfitRecommendation(
-                            outfit=outfit,
-                            score=score,
-                            reasoning=reasoning,
-                            match_factors=match_factors
-                        )
-                        scored_recommendations.append(recommendation)
-                        
-                except Exception as e:
-                    logger_service.error(f"Error scoring outfit {outfit.id}: {str(e)}")
-                    continue
+            # Step 3: OPTIMIZATION - Score outfits in parallel batches for better performance
+            scored_recommendations = await self._score_outfits_parallel(
+                candidates, user, user_profile_data, database_service
+            )
             
             # Step 4: Sort by score and limit results
             scored_recommendations.sort(key=lambda x: x.score, reverse=True)
@@ -145,6 +137,123 @@ class RecommendationService:
                 user_profile_strength=0.0
             )
     
+    async def _get_cached_user_profile_data(
+        self, 
+        user: User, 
+        database_service: DatabaseService
+    ) -> Dict[str, Any]:
+        """
+        Get user profile data with caching to avoid redundant database queries.
+        OPTIMIZATION: Caches user profile data for 5 minutes to speed up recommendations.
+        """
+        global _profile_cache, _profile_cache_ttl
+        
+        cache_key = f"profile_{user.id}"
+        current_time = time.time()
+        
+        # Check if we have valid cached data
+        if (cache_key in _profile_cache and 
+            cache_key in _profile_cache_ttl and 
+            current_time - _profile_cache_ttl[cache_key] < PROFILE_CACHE_DURATION):
+            
+            logger_service.info(f"Using cached profile data for user {user.id}")
+            return _profile_cache[cache_key]
+        
+        # Cache miss or expired - fetch fresh data
+        logger_service.info(f"Fetching fresh profile data for user {user.id}")
+        profile_data = await self._gather_user_profile_data(user, database_service)
+        
+        # Cache the result
+        _profile_cache[cache_key] = profile_data
+        _profile_cache_ttl[cache_key] = current_time
+        
+        # Clean up old cache entries (simple cleanup)
+        self._cleanup_profile_cache()
+        
+        return profile_data
+    
+    def _cleanup_profile_cache(self):
+        """Clean up expired cache entries to prevent memory bloat."""
+        global _profile_cache, _profile_cache_ttl
+        
+        current_time = time.time()
+        expired_keys = [
+            key for key, timestamp in _profile_cache_ttl.items()
+            if current_time - timestamp >= PROFILE_CACHE_DURATION
+        ]
+        
+        for key in expired_keys:
+            _profile_cache.pop(key, None)
+            _profile_cache_ttl.pop(key, None)
+    
+    async def _score_outfits_parallel(
+        self,
+        candidates: List[DatabaseOutfit],
+        user: User,
+        user_profile_data: Dict[str, Any],
+        database_service: DatabaseService,
+        batch_size: int = 8  # OPTIMIZATION: Reduced batch size to prevent DB overload
+    ) -> List[OutfitRecommendation]:
+        """
+        Score outfits in parallel batches for better performance.
+        OPTIMIZED: Processes multiple outfits concurrently with controlled batch size.
+        """
+        scored_recommendations = []
+        
+        # OPTIMIZATION: Add early termination if we have enough high-scoring results
+        high_score_threshold = 0.7
+        target_high_scores = min(50, len(candidates))  # Cap at 50 high-scoring outfits
+        
+        # Process outfits in smaller batches to avoid overwhelming the system
+        for i in range(0, len(candidates), batch_size):
+            batch = candidates[i:i + batch_size]
+            
+            # Create async tasks for parallel processing
+            tasks = [
+                self._score_outfit_for_user(outfit, user, user_profile_data, database_service)
+                for outfit in batch
+            ]
+            
+            try:
+                # Wait for all tasks in the batch to complete with timeout
+                batch_results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=30.0  # 30 second timeout per batch
+                )
+                
+                # Process results and handle any exceptions
+                for outfit, result in zip(batch, batch_results):
+                    if isinstance(result, Exception):
+                        logger_service.error(f"Error scoring outfit {outfit.id}: {str(result)}")
+                        continue
+                    
+                    score, reasoning, match_factors = result
+                    if score > 0:  # Only include positive scores
+                        recommendation = OutfitRecommendation(
+                            outfit=outfit,
+                            score=score,
+                            reasoning=reasoning,
+                            match_factors=match_factors
+                        )
+                        scored_recommendations.append(recommendation)
+                
+                # OPTIMIZATION: Early termination if we have enough high-quality results
+                high_scoring = [r for r in scored_recommendations if r.score >= high_score_threshold]
+                if len(high_scoring) >= target_high_scores:
+                    logger_service.info(
+                        f"Early termination: Found {len(high_scoring)} high-scoring outfits"
+                    )
+                    break
+                    
+            except asyncio.TimeoutError:
+                logger_service.warning(f"Batch scoring timeout for batch starting at {i}")
+                continue
+            except Exception as e:
+                logger_service.error(f"Error processing batch starting at {i}: {str(e)}")
+                continue
+        
+        return scored_recommendations
+    
     async def _gather_user_profile_data(
         self, 
         user: User, 
@@ -152,6 +261,7 @@ class RecommendationService:
     ) -> Dict[str, Any]:
         """
         Gather comprehensive user profile data for recommendation scoring.
+        OPTIMIZED: Uses parallel fetching to reduce total time.
         
         Returns:
             Dict containing user interaction patterns and preferences
@@ -173,22 +283,31 @@ class RecommendationService:
         }
         
         try:
-            # Get user's liked outfits (more data for pattern analysis)
-            liked_outfits_response = await database_service.get_liked_outfits_with_products(
-                user.id, page=1, page_size=100
-            )
-            profile_data['liked_outfits'] = liked_outfits_response.data
+            # OPTIMIZATION: Fetch all user data in parallel instead of sequentially
+            tasks = [
+                database_service.get_liked_outfits_with_products(user.id, page=1, page_size=100),
+                database_service.get_liked_products(user.id, page=1, page_size=100),
+                self._get_user_collection_items(user.id, database_service)
+            ]
             
-            # Get user's liked products
-            liked_products_response = await database_service.get_liked_products(
-                user.id, page=1, page_size=100
-            )
-            profile_data['liked_products'] = liked_products_response.data
+            # Wait for all data fetching to complete in parallel
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # Get user's collections for additional insight
-            profile_data['collection_items'] = await self._get_user_collection_items(
-                user.id, database_service
-            )
+            # Process results and handle any exceptions
+            if not isinstance(results[0], Exception):
+                profile_data['liked_outfits'] = results[0].data
+            else:
+                logger_service.error(f"Error fetching liked outfits: {str(results[0])}")
+            
+            if not isinstance(results[1], Exception):
+                profile_data['liked_products'] = results[1].data
+            else:
+                logger_service.error(f"Error fetching liked products: {str(results[1])}")
+            
+            if not isinstance(results[2], Exception):
+                profile_data['collection_items'] = results[2]
+            else:
+                logger_service.error(f"Error fetching collection items: {str(results[2])}")
             
             # Analyze interaction patterns
             profile_data['interaction_patterns'] = self._analyze_interaction_patterns(
@@ -310,28 +429,40 @@ class RecommendationService:
         user_id: str,
         database_service: DatabaseService,
         exclude_liked: bool = True,
-        style_filter: Optional[str] = None
+        style_filter: Optional[str] = None,
+        user: Optional[User] = None  # FIXED: Accept user object directly
     ) -> List[DatabaseOutfit]:
         """
         Get candidate outfits for recommendation scoring.
+        OPTIMIZED: Uses smart database-level filtering to reduce candidate pool.
         
         Args:
             user_id: User ID for filtering liked outfits
             database_service: Database service
             exclude_liked: Whether to exclude already liked outfits
             style_filter: Optional style filter
+            user: User object with preferences (FIXED: no need to fetch from DB)
             
         Returns:
             List of candidate outfits with products included
         """
         try:
-            # Get a larger set of outfits to choose from
+            # OPTIMIZATION: Build style filter combining user preferences and request filter
+            combined_style_filter = style_filter
+            if user and user.positive_styles:
+                user_styles = ','.join(user.positive_styles)
+                if style_filter:
+                    combined_style_filter = f"{style_filter},{user_styles}"
+                else:
+                    combined_style_filter = user_styles
+            
+            # OPTIMIZATION: Get more outfits initially but use better filtering
             outfits_response = await database_service.get_outfits_with_products(
                 page=1, 
-                page_size=200,  # Get more candidates for better recommendations
+                page_size=150,  # Reduced from 200 due to better filtering
                 user_id=user_id,
                 include_likes=True,
-                style=style_filter
+                style=combined_style_filter  # Use combined style filtering
             )
             
             candidates = outfits_response.data
@@ -340,12 +471,49 @@ class RecommendationService:
             if exclude_liked:
                 candidates = [outfit for outfit in candidates if not outfit.is_liked]
             
-            logger_service.info(f"Found {len(candidates)} candidate outfits for recommendations")
+            # OPTIMIZATION: Additional filtering based on user preferences
+            if user:
+                candidates = self._apply_preference_filtering(candidates, user)
+            
+            logger_service.info(f"Found {len(candidates)} candidate outfits for recommendations after filtering")
             return candidates
             
         except Exception as e:
             logger_service.error(f"Error getting candidate outfits: {str(e)}")
             return []
+    
+    def _apply_preference_filtering(
+        self,
+        candidates: List[DatabaseOutfit],
+        user_data: User
+    ) -> List[DatabaseOutfit]:
+        """
+        Apply additional filtering based on user preferences to reduce candidates.
+        OPTIMIZATION: Pre-filter candidates to reduce computational load.
+        """
+        filtered_candidates = []
+        
+        for outfit in candidates:
+            # Skip outfits with negative style preferences
+            if outfit.style and user_data.negative_styles:
+                outfit_styles = [s.strip().lower() for s in outfit.style.split(',')]
+                user_negative_styles = [s.lower() for s in user_data.negative_styles]
+                if any(style in user_negative_styles for style in outfit_styles):
+                    continue  # Skip this outfit
+            
+            # Skip outfits with too many negative brand preferences
+            if outfit.products and user_data.negative_brands:
+                outfit_brands = [p.brand.lower() for p in outfit.products if p.brand]
+                user_negative_brands = [b.lower() for b in user_data.negative_brands]
+                negative_brand_count = sum(1 for brand in outfit_brands if brand in user_negative_brands)
+                
+                # Skip if more than half the products are from negative brands
+                if outfit_brands and negative_brand_count > len(outfit_brands) / 2:
+                    continue
+            
+            filtered_candidates.append(outfit)
+        
+        return filtered_candidates
     
     async def _score_outfit_for_user(
         self,
@@ -356,6 +524,7 @@ class RecommendationService:
     ) -> Tuple[float, List[str], Dict[str, float]]:
         """
         Score an outfit for a specific user based on multiple factors.
+        OPTIMIZED: Uses tiered scoring with early termination for better performance.
         
         Returns:
             Tuple of (score, reasoning_list, match_factors_dict)
@@ -365,6 +534,12 @@ class RecommendationService:
         match_factors = {}
         
         try:
+            # OPTIMIZATION: Tier 1 - Quick preference check (early termination)
+            # Check for deal-breaker negative preferences first
+            quick_score = self._quick_preference_check(outfit, user)
+            if quick_score < 0.1:  # Early termination for very low scores
+                return 0.0, ["Does not match your preferences"], {}
+            
             # Factor 1: User preferences alignment
             pref_score = self._score_user_preferences_alignment(outfit, user, user_profile_data)
             match_factors['user_preferences'] = pref_score
@@ -374,6 +549,10 @@ class RecommendationService:
                 reasoning.append(f"Strong match with your style preferences ({pref_score:.1%})")
             elif pref_score > 0.4:
                 reasoning.append(f"Good match with your preferences ({pref_score:.1%})")
+            
+            # OPTIMIZATION: Early termination if preferences don't match well
+            if pref_score < 0.2 and len(user_profile_data.get('liked_outfits', [])) > 5:
+                return total_score, reasoning, match_factors
             
             # Factor 2: Interaction history similarity
             interaction_score = self._score_interaction_history_similarity(outfit, user_profile_data)
@@ -432,6 +611,43 @@ class RecommendationService:
             reasoning = ["Error occurred during scoring"]
         
         return total_score, reasoning, match_factors
+    
+    def _quick_preference_check(self, outfit: DatabaseOutfit, user: User) -> float:
+        """
+        Quick check for basic preference alignment to enable early termination.
+        OPTIMIZATION: Fast preliminary score to avoid detailed computation on poor matches.
+        """
+        score = 0.5  # Base score
+        
+        # Check style preferences
+        if outfit.style and user.negative_styles:
+            outfit_styles = [s.strip().lower() for s in outfit.style.split(',')]
+            user_negative_styles = [s.lower() for s in user.negative_styles]
+            if any(style in user_negative_styles for style in outfit_styles):
+                return 0.0  # Deal breaker
+        
+        if outfit.style and user.positive_styles:
+            outfit_styles = [s.strip().lower() for s in outfit.style.split(',')]
+            user_positive_styles = [s.lower() for s in user.positive_styles]
+            if any(style in user_positive_styles for style in outfit_styles):
+                score += 0.3
+        
+        # Quick brand check
+        if outfit.products:
+            negative_brand_penalty = 0
+            positive_brand_bonus = 0
+            
+            for product in outfit.products[:3]:  # Only check first 3 products for speed
+                if product.brand:
+                    brand_lower = product.brand.lower()
+                    if brand_lower in [b.lower() for b in user.negative_brands]:
+                        negative_brand_penalty += 0.1
+                    if brand_lower in [b.lower() for b in user.positive_brands]:
+                        positive_brand_bonus += 0.1
+            
+            score = score - negative_brand_penalty + positive_brand_bonus
+        
+        return max(0.0, min(1.0, score))
     
     def _score_user_preferences_alignment(
         self,

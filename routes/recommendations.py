@@ -130,6 +130,7 @@ async def get_outfit_recommendations_get(
 ) -> OutfitRecommendationResponse:
     """
     Get personalized outfit recommendations for the current user (GET version).
+    OPTIMIZED: Performance monitoring and improved caching.
     
     This is a GET endpoint version of the recommendation API for easier testing
     and integration with simple HTTP clients.
@@ -149,6 +150,9 @@ async def get_outfit_recommendations_get(
     Raises:
         HTTPException: If recommendation generation fails
     """
+    import time
+    start_time = time.time()
+    
     # Create request object and delegate to POST endpoint logic
     request = RecommendationRequest(
         limit=limit,
@@ -157,12 +161,49 @@ async def get_outfit_recommendations_get(
         include_reasoning=include_reasoning
     )
     
-    return await get_outfit_recommendations(
+    result = await get_outfit_recommendations(
         request=request,
         current_user=current_user,
         recommendation_service=recommendation_service,
         database_service=database_service
     )
+    
+    # Add performance monitoring
+    end_time = time.time()
+    processing_time = end_time - start_time
+    logger_service.info(f"Recommendations generated in {processing_time:.2f}s for user {current_user.id}")
+    
+    return result
+
+@router.post("/recommendations/clear-cache")
+async def clear_recommendation_cache(
+    current_user: User = Depends(get_current_user)
+) -> dict:
+    """
+    Clear the recommendation cache for the current user.
+    Useful when user preferences have changed significantly.
+    """
+    try:
+        from services.recommendation import _profile_cache, _profile_cache_ttl
+        
+        cache_key = f"profile_{current_user.id}"
+        _profile_cache.pop(cache_key, None)
+        _profile_cache_ttl.pop(cache_key, None)
+        
+        logger_service.info(f"Cleared recommendation cache for user {current_user.id}")
+        
+        return {
+            "success": True,
+            "message": "Recommendation cache cleared successfully"
+        }
+        
+    except Exception as e:
+        error_msg = f"Failed to clear recommendation cache: {str(e)}"
+        logger_service.error(error_msg)
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
 
 @router.get("/recommendations/profile-strength", response_model=dict)
 async def get_user_profile_strength(
