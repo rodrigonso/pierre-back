@@ -40,23 +40,23 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
         if not response.user:
             return None
-        
+
         logger_service.success(f"Token verified successfully for user: {response.user.id}")
         auth_user = response.user
-        
+
         logger_service.info(f"Checking user profile for user ID: {auth_user.id}")
         # Get user profile from the profiles table
         profile_response = await supabase_client.table("profiles").select("*").eq("id", auth_user.id).execute()
 
         if not profile_response.data:
             raise Exception("User profile not found in database")
-        
+
         logger_service.success(f"User profile found for user ID: {auth_user.id}")
 
         if not profile_response.data:
             logger_service.warning(f"No profile data found for user ID: {auth_user.id}")
             return None
-        
+
         profile = profile_response.data[0]
             # Map database fields to User model
         return User(
@@ -85,6 +85,8 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         logger_service.info(f"Verifying token: {token}")
         supabase_client: Client = await acreate_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
         response = await supabase_client.auth.get_user(token)
+
+        logger_service.debug(f"Token: {token}, Response: {response}")
 
         if not response.user:
             raise HTTPException(status_code=401, detail="Invalid token")

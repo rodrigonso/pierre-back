@@ -215,3 +215,70 @@ class AddItemToCollection(BaseModel):
     """
     item_type: str = Field(..., pattern="^(product|outfit)$", description="Item type: product or outfit")
     item_id: str | int = Field(..., description="ID of the item to add")
+
+# Recommendation Models
+class RecommendationRequest(BaseModel):
+    """
+    Model for outfit recommendation requests
+    
+    Attributes:
+        limit: Maximum number of recommendations to return (1-50)
+        exclude_liked: Whether to exclude already liked outfits
+        style_filter: Optional style filter to apply
+        include_reasoning: Whether to include reasoning for recommendations
+    """
+    limit: int = Field(20, ge=1, le=50, description="Maximum number of recommendations")
+    exclude_liked: bool = Field(True, description="Exclude already liked outfits")
+    style_filter: Optional[str] = Field(None, description="Filter by specific styles (comma-separated)")
+    include_reasoning: bool = Field(True, description="Include reasoning for recommendations")
+
+class RecommendationMatchFactors(BaseModel):
+    """
+    Model for recommendation match factors breakdown
+    
+    Attributes:
+        user_preferences: Score based on user's stated preferences
+        interaction_history: Score based on user's interaction history
+        collection_similarity: Score based on user's collections
+        product_compatibility: Score based on similarity to liked individual products
+        outfit_popularity: Score based on outfit's popularity
+    """
+    user_preferences: float = Field(..., description="User preferences alignment score")
+    interaction_history: float = Field(..., description="Interaction history similarity score")
+    collection_similarity: float = Field(..., description="Collection similarity score")
+    product_compatibility: float = Field(..., description="Individual product similarity score")
+    outfit_popularity: float = Field(..., description="Outfit popularity score")
+
+class SingleOutfitRecommendation(BaseModel):
+    """
+    Model for a single outfit recommendation
+    
+    Attributes:
+        outfit: The recommended outfit with all details
+        score: Overall recommendation score (0.0-1.0)
+        reasoning: List of reasons why this outfit was recommended
+        match_factors: Breakdown of scoring factors
+    """
+    outfit: DatabaseOutfit
+    score: float = Field(..., ge=0.0, le=1.0, description="Recommendation score")
+    reasoning: List[str] = Field(..., description="Reasons for recommendation")
+    match_factors: Optional[RecommendationMatchFactors] = Field(None, description="Score breakdown")
+
+class OutfitRecommendationResponse(BaseModel):
+    """
+    Model for outfit recommendation API response
+    
+    Attributes:
+        recommendations: List of recommended outfits with scores
+        total_count: Total number of potential recommendations
+        user_profile_strength: How much we know about the user (0.0-1.0)
+        algorithm_version: Version of the recommendation algorithm used
+        success: Whether the recommendation generation was successful
+        message: Optional message about the recommendations
+    """
+    recommendations: List[SingleOutfitRecommendation]
+    total_count: int = Field(..., description="Total recommendations before limiting")
+    user_profile_strength: float = Field(..., ge=0.0, le=1.0, description="User profile completeness")
+    algorithm_version: str = Field("v1.0", description="Recommendation algorithm version")
+    success: bool = Field(True, description="Whether recommendation was successful")
+    message: Optional[str] = Field(None, description="Optional message about recommendations")
