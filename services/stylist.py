@@ -81,6 +81,7 @@ class OutfitConcept:
 @dataclass
 class OutfitProductEvaluation:
     score: float
+    product_id: str
     product_title: str
     reasoning: str
 
@@ -321,7 +322,8 @@ class StylistService:
                     logger_service.debug(f"Evaluating products for item {item.search_query}: {[p.title for p in products]}")
                     # Create input that includes both item and products
                     products_formatted = "\n".join([
-                        f"""### {i+1}. {p.title}
+                        f"""### {i+1}. {p.id}
+- **Title:** {p.title}
 - **Brand:** {p.brand}
 - **Price:** ${p.price}
 - **Description:** {p.description[:100]}{'...' if len(p.description) > 100 else ''}
@@ -332,6 +334,7 @@ class StylistService:
 - Search Query: {item.search_query}
 - Color: {item.color}
 - Type: {item.type}
+- Style: {item.style}
 
 ## Available Products:
 {products_formatted}
@@ -350,7 +353,7 @@ class StylistService:
                     best_product_score = max(evaluation_result, key=lambda x: x.score, default=None)
 
                     matching_product = next(
-                        (product for product in item_to_products[item] if product.title == best_product_score.product_title),
+                        (product for product in item_to_products[item] if product.id == best_product_score.product_id),
                         None
                     )
 

@@ -55,7 +55,8 @@ async def create_collection(
             "id": collection_id,
             "user_id": current_user.id,
             "name": collection_data.name,
-            "description": collection_data.description
+            "description": collection_data.description,
+            "image_url": collection_data.image_url
         }
         
         response = await supabase.table("collections").insert(insert_data).execute()

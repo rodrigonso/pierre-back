@@ -116,6 +116,7 @@ class CollectionCreate(BaseModel):
     """
     name: str = Field(..., min_length=1, max_length=100, description="Collection name")
     description: Optional[str] = Field(None, max_length=500, description="Optional description")
+    image_url: Optional[str] = Field(None, description="Optional image URL")
 
 class CollectionUpdate(BaseModel):
     """
