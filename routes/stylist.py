@@ -228,7 +228,8 @@ async def stylist_request(
             logger_service.info("Routing to outfit generation")
             
             # Determine number of outfits to generate (default to 1)
-            num_items = getattr(request, 'number_of_items', 1)
+            # num_items = getattr(request, 'number_of_items', 1)
+            num_items = 1
             logger_service.info(f"Generating {num_items} outfit(s) in parallel")
 
             # Generate multiple outfits in parallel
