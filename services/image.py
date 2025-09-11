@@ -72,7 +72,7 @@ class ImageService:
         Returns:
             GenerateContentResponse: Response from the LLM
         """
-        model = "gemini-2.0-flash-exp-image-generation"
+        model = "gemini-2.5-flash-image-preview"
         generate_content_config = types.GenerateContentConfig(
             response_modalities=["image", "text"],
             response_mime_type="text/plain",
